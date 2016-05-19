@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "2.1.1",
-    "cksum": "2615511875 5108",
+    "version": "2.1.2",
+    "cksum": "1581357832 6188",
     "tables": {
         "Logical_Switch": {
             "columns": {
@@ -14,6 +14,11 @@
                 "acls": {"type": {"key": {"type": "uuid",
                                           "refTable": "ACL",
                                           "refType": "strong"},
+                                  "min": 0,
+                                  "max": "unlimited"}},
+                "clflows": {"type": {"key": {"type": "uuid",
+                                             "refTable": "Custom_Lflow",
+                                             "refType": "strong"},
                                   "min": 0,
                                   "max": "unlimited"}},
                 "external_ids": {
@@ -58,6 +63,21 @@
                 "match": {"type": "string"},
                 "action": {"type": {"key": {"type": "string",
                                             "enum": ["set", ["allow", "allow-related", "drop", "reject"]]}}},
+                "log": {"type": "boolean"},
+                "external_ids": {
+                    "type": {"key": "string", "value": "string",
+                             "min": 0, "max": "unlimited"}}},
+            "isRoot": false},
+        "Custom_Lflow": {
+            "columns": {
+                "flow_id": {"type": "string"},
+                "priority": {"type": {"key": {"type": "integer",
+                                              "minInteger": 0,
+                                              "maxInteger": 32767}}},
+                "direction": {"type": {"key": {"type": "string",
+                                            "enum": ["set", ["from-lport", "to-lport"]]}}},
+                "match": {"type": "string"},
+                "action": {"type": "string"},
                 "log": {"type": "boolean"},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",

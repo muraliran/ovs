@@ -73,6 +73,10 @@
       Access control rules that apply to packets within the logical switch.
     </column>
 
+    <column name="clflows">
+      Custom logical flows that apply to packets within the logical switch.
+    </column>
+
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
@@ -490,7 +494,85 @@
       </column>
     </group>
   </table>
+  <table name="Custom_Lflow" title="Custom Logical Flow">
+    <p>
+      Each row in this table represents one logical flow for a logical switch
+      that points to it through its <ref column="clflows"/> column.
+    </p>
 
+    <column name="flow_id">
+      <p>
+        An id to identify the flow.
+      </p>
+
+      <p>
+        This id wil be used to delete the flow
+      </p>
+    </column>
+
+    <column name="priority">
+      <p>
+        The lflow priority. Flows with numerically higher priority take precedence
+        over those with lower. If two lflows with  the same priority  both match,
+        then the flow used for a packet is undefined.
+      </p>
+
+      <p>
+        Return traffic follows the egress rules if defined else, default
+      </p>
+    </column>
+
+    <column name="direction">
+      <p>Direction of the traffic to which this rule should apply:</p>
+      <ul>
+        <li>
+          <code>from-lport</code>: Used to implement filters on traffic
+          arriving from a logical port.  These rules are applied to the
+          logical switch's ingress pipeline.
+        </li>
+        <li>
+          <code>to-lport</code>: Used to implement filters on traffic
+          forwarded to a logical port.  These rules are applied to the
+          logical switch's egress pipeline.
+        </li>
+      </ul>
+    </column>
+
+    <column name="match">
+      <p>
+        The packets that the flow should match, in the same expression
+        language used for the <ref column="match" table="Logical_Flow"
+        db="OVN_Southbound"/> column in the OVN Southbound database's
+        <ref table="Logical_Flow" db="OVN_Southbound"/> table.  The
+        <code>outport</code> logical port is only available in the
+        <code>to-lport</code> direction (the <code>inport</code> is
+        available in both directions).
+      </p>
+
+    </column>
+
+    <column name="action">
+      <p>The action to take when the flow rules matches:</p>
+    </column>
+
+    <column name="log">
+      <p>
+        If set to <code>true</code>, packets that match the flow will trigger a
+        log message on the transport node or nodes that perform flow processing.
+        Logging may be combined with any <ref column="action"/>.
+      </p>
+
+      <p>
+        Logging is not yet implemented.
+      </p>
+    </column>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
   <table name="ACL" title="Access Control List (ACL) rule">
     <p>
       Each row in this table represents one ACL rule for a logical switch

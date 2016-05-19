@@ -330,6 +330,11 @@ Logical port commands:\n\
                             Set options related to the type of LPORT\n\
   lport-get-options LPORT   Get the type specific options for LPORT\n\
 \n\
+Logical flow commands:\n\
+  lflow-add LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID\n\
+                            add a logical flow identified by FLOWID\n\
+  lflow-del LSWITCH FLOWID  delete a logical flow identified by FLOWID\n\
+\n\
 %s\
 \n\
 Options:\n\
@@ -1103,7 +1108,115 @@ nbctl_acl_del(struct ctl_context *ctx)
         }
     }
 }
-
+
+/* Custom Logical Flows management functions */
+static const struct nbrec_custom_lflow *
+clflow_by_name_or_uuid(struct ctl_context *ctx, const char *id,
+                       bool must_exist)
+{
+    const struct nbrec_custom_lflow *lflow = NULL;
+
+    struct uuid lflow_uuid;
+    bool is_uuid = uuid_from_string(&lflow_uuid, id);
+    if (is_uuid) {
+        lflow = nbrec_custom_lflow_get_for_uuid(ctx->idl, &lflow_uuid);
+    }
+
+    if (!lflow) {
+        NBREC_CUSTOM_LFLOW_FOR_EACH(lflow, ctx->idl) {
+            if (!strcmp(lflow->flow_id, id)) {
+                break;
+            }
+        }
+    }
+
+    if (!lflow && must_exist) {
+        ctl_fatal("%s: lflow %s not found", id, is_uuid ? "UUID" : "flow_id");
+    }
+
+    return lflow;
+}
+
+static void
+remove_clflow(const struct nbrec_logical_switch *lswitch, size_t idx)
+{
+    const struct nbrec_custom_lflow *clflow = lswitch->clflows[idx];
+
+    /* First remove 'lflow' from the array of clflows.  This is what will
+     * actually cause the logical flow to be deleted when the transaction is
+     * sent to the database server (due to garbage collection). */
+    struct nbrec_custom_lflow **new_lflows
+        = xmemdup(lswitch->clflows, sizeof *new_lflows * lswitch->n_clflows);
+    new_lflows[idx] = new_lflows[lswitch->n_clflows - 1];
+    nbrec_logical_switch_verify_clflows(lswitch);
+    nbrec_logical_switch_set_clflows(lswitch, new_lflows, lswitch->n_clflows - 1);
+    free(new_lflows);
+
+    /* Delete 'lflow' from the IDL.  This won't have a real effect on the
+     * database server (the IDL will suppress it in fact) but it means that it
+     * won't show up when we iterate with NBREC_CUSTOM_LFLOW_FOR_EACH later. */
+    nbrec_custom_lflow_delete(clflow);
+}
+
+static void
+nbctl_lflow_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *lswitch;
+    lswitch = lswitch_by_name_or_uuid(ctx, ctx->argv[1], true);
+
+    const struct nbrec_custom_lflow *clflow;
+    clflow = clflow_by_name_or_uuid(ctx, ctx->argv[2], false);
+    if (!clflow) {
+        return;
+    }
+
+    for (size_t i = 0; i < lswitch->n_clflows; i++) {
+        if (!strcmp(clflow->flow_id, lswitch->clflows[i]->flow_id)) {
+            remove_clflow(lswitch, i);
+            return;
+        }
+    }
+
+    /* Can't happen because of the database schema. */
+    ctl_fatal("logical flow %s is not part of any logical switch",
+              ctx->argv[1]);
+}
+
+static void
+nbctl_lflow_add(struct ctl_context *ctx)
+{
+    /* "lflow-add", 6, 6, "LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID" */
+    const char *match = ctx->argv[4];
+    const char *action = ctx->argv[5];
+    const struct nbrec_logical_switch *lswitch;
+    lswitch = lswitch_by_name_or_uuid(ctx, ctx->argv[1], true);
+    const char *direction = parse_direction(ctx->argv[2]);
+    int64_t priority = parse_priority(ctx->argv[3]);
+    const char *flow_id = ctx->argv[6];
+
+    /* create a new custom logical flow */
+    struct nbrec_custom_lflow *lflow = nbrec_custom_lflow_insert(ctx->txn);
+    nbrec_custom_lflow_set_priority(lflow, priority);
+    nbrec_custom_lflow_set_direction(lflow, direction);
+    nbrec_custom_lflow_set_flow_id(lflow, flow_id);
+    nbrec_custom_lflow_set_match(lflow, match);
+    nbrec_custom_lflow_set_action(lflow, action);
+
+    if (shash_find(&ctx->options, "--log") != NULL) {
+        nbrec_custom_lflow_set_log(lflow, true);
+    }
+
+    /* Update lswitch table with the lflow */
+    nbrec_logical_switch_verify_clflows(lswitch);
+    struct nbrec_custom_lflow **new_clflows = xmalloc(sizeof *new_clflows *
+                                          (lswitch->n_clflows + 1));
+    memcpy(new_clflows, lswitch->clflows, sizeof *new_clflows * lswitch->n_clflows);
+    new_clflows[lswitch->n_clflows] = lflow;
+    nbrec_logical_switch_set_clflows(lswitch, new_clflows, lswitch->n_clflows + 1);
+    free(new_clflows);
+}
+/* End of Custom Logical Flows management functions */
+
 static const struct ctl_table_class tables[] = {
     {&nbrec_table_logical_switch,
      {{&nbrec_table_logical_switch, &nbrec_logical_switch_col_name, NULL},
@@ -1381,6 +1494,12 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_lport_set_options, NULL, "", RW },
     { "lport-get-options", 1, 1, "LPORT", NULL, nbctl_lport_get_options, NULL,
       "", RO },
+
+    /* lflow commands. */
+    { "lflow-add", 6, 6, "LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID", NULL,
+      nbctl_lflow_add, NULL, "", RW },
+    { "lflow-del", 2, 2, "LSWITCH FLOWID", NULL,
+      nbctl_lflow_del, NULL, "", RW },
 
     {NULL, 0, 0, NULL, NULL, NULL, NULL, "", RO},
 };
