@@ -500,13 +500,27 @@
       that points to it through its <ref column="clflows"/> column.
     </p>
 
+    <p>
+      A custom logical flow is defined when a dynamic packet forwarding is needed.
+      For example, based on a specific criteria if you have to pass the pasket to
+      a service before it follows standard l2 lookup, we can insert a flow here.
+      Though this is strictly not for service chaining, one could create a pretty
+      powerful service chaining using the custom logical flows, if the CMS or a
+      topology manager or SDN controller.
+    </p>
+
     <column name="flow_id">
       <p>
-        An id to identify the flow.
+        An id to identify the flow. The type is kept open as a string in order
+        to be able to fit in ID corresponding to 20 bit MPLS label or a UUID or
+        an nsh id. The flow typically uses the ID in the match portion, though
+        it is not mandated. One could just compare other header fields as
+        provided by the ovs classifier.
       </p>
 
       <p>
-        This id wil be used to delete the flow
+        You must define this ID even if not used in the match clause. Because
+        this is needed to delete the flow.
       </p>
     </column>
 
@@ -518,7 +532,7 @@
       </p>
 
       <p>
-        Return traffic follows the egress rules if defined else, default
+        This flow is valid only for the flow defined here, not the egress flow.
       </p>
     </column>
 
@@ -526,14 +540,12 @@
       <p>Direction of the traffic to which this rule should apply:</p>
       <ul>
         <li>
-          <code>from-lport</code>: Used to implement filters on traffic
-          arriving from a logical port.  These rules are applied to the
-          logical switch's ingress pipeline.
+          <code>from-lport</code>: The match is performed on the ingress flow,
+          i.e., on traffic arriving from a logical port
         </li>
         <li>
-          <code>to-lport</code>: Used to implement filters on traffic
-          forwarded to a logical port.  These rules are applied to the
-          logical switch's egress pipeline.
+          <code>to-lport</code>: Match performed on traffic forwarded (output)
+          to a logical port.
         </li>
       </ul>
     </column>
@@ -552,7 +564,7 @@
     </column>
 
     <column name="action">
-      <p>The action to take when the flow rules matches:</p>
+      <p>The action to take when the flow rules matches.</p>
     </column>
 
     <column name="log">
@@ -564,6 +576,20 @@
 
       <p>
         Logging is not yet implemented.
+      </p>
+    </column>
+
+    <column name="flow_type">
+      <p>
+        The flow_type gives a hint on how to translate the match and action.
+        Currently supported types are <code>fwd</code>, <code>next_hop</code>.
+        The <code>fwd</code> means the match is an L2 forwarding rule. The
+        option <code>next_hop</code> is used for custom routing.
+        This is an optional parameter and defaults to <code>fwd</code>.
+      </p>
+
+      <p>
+        The <code>next_hop</code> is not implemented yet.
       </p>
     </column>
 

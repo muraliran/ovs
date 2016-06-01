@@ -94,13 +94,15 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        3, "ls_in_pre_acl")      \
     PIPELINE_STAGE(SWITCH, IN,  ACL,            4, "ls_in_acl")          \
     PIPELINE_STAGE(SWITCH, IN,  ARP_RSP,        5, "ls_in_arp_rsp")      \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        6, "ls_in_l2_lkup")      \
+    PIPELINE_STAGE(SWITCH, IN,  CUSTOM_FWD,     6, "ls_in_cust_fwd")     \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        7, "ls_in_l2_lkup")      \
                                                                       \
     /* Logical switch egress stages. */                               \
     PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,     0, "ls_out_pre_acl")     \
     PIPELINE_STAGE(SWITCH, OUT, ACL,         1, "ls_out_acl")         \
     PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP, 2, "ls_out_port_sec_ip")    \
     PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2, 3, "ls_out_port_sec_l2")    \
+    PIPELINE_STAGE(SWITCH, OUT, CUSTOM_FWD,  4, "ls_out_cust_fwd")    \
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,   0, "lr_in_admission")    \
@@ -117,6 +119,29 @@ enum ovn_stage {
         = OVN_STAGE_BUILD(DP_##DP_TYPE, P_##PIPELINE, TABLE),
     PIPELINE_STAGES
 #undef PIPELINE_STAGE
+};
+
+/* Defining type of custom logical flow.
+ *
+ * A custom logical flow is typically defined to send a packet to a dst
+ * that is NOT the standard L2 lookup entry. Typical use case for such a
+ * flow would be dynamic forwarding flow based on some criteria (policies).
+ * Considering this change in forwarding could be temperory until policy
+ * or criteria is in force, its not updated as default destination in the
+ * mac lookup table.
+ * Other possibilities include defining flow types for pre-acl, dpi or an
+ * egress pipeline override which may be added in future */
+enum ovn_custom_lflow_type {
+    /* "fwd"
+     * Standard flor forwarding to a custom destination. This is L2
+     * forwarding only, but could be across tunnel in another chassis */
+    CLFLOW_FORWARD = 0,
+
+    /* "next_hop"
+     * Set the next hop to a router or a gateway so a flow can manage
+     * custom traffic in those networks. This is a primitive L3
+     * flow customization  */
+    CLFLOW_NEXT_HOP
 };
 
 /* Due to various hard-coded priorities need to implement ACLs, the
@@ -1417,6 +1442,24 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     }
 }
 
+/* Build custom logical flows */
+static void
+build_clflows(struct ovn_datapath *od, struct hmap *lflows)
+{
+    for (size_t i = 0; i < od->nbs->n_clflows; i++) {
+        struct nbrec_custom_lflow *lflow = od->nbs->clflows[i];
+
+        if (lflow->flow_type == CLFLOW_FORWARD) {
+            bool ingress = !strcmp(lflow->direction, "from-lport") ?
+                                                                 true :false;
+            enum ovn_stage stage = ingress ? S_SWITCH_IN_CUSTOM_FWD :
+                                                S_SWITCH_OUT_CUSTOM_FWD;
+            ovn_lflow_add(lflows, od, stage, lflow->priority,
+                                                lflow->match, lflow->action);
+        }
+    }
+}
+
 static void
 build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *lflows, struct hmap *mcgroups)
@@ -1570,6 +1613,15 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
 
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_RSP, 0, "1", "next;");
+    }
+
+    /* Ingress table 6: define custom lflows with priority higher than 100 */
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs) {
+            continue;
+        }
+
+        build_clflows(od, lflows);
     }
 
     /* Ingress table 6: Destination lookup, broadcast and multicast handling

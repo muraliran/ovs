@@ -331,7 +331,7 @@ Logical port commands:\n\
   lport-get-options LPORT   Get the type specific options for LPORT\n\
 \n\
 Logical flow commands:\n\
-  lflow-add LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID\n\
+  lflow-add LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID [FLOWTYPE]\n\
                             add a logical flow identified by FLOWID\n\
   lflow-del LSWITCH FLOWID  delete a logical flow identified by FLOWID\n\
 \n\
@@ -1149,7 +1149,8 @@ remove_clflow(const struct nbrec_logical_switch *lswitch, size_t idx)
         = xmemdup(lswitch->clflows, sizeof *new_lflows * lswitch->n_clflows);
     new_lflows[idx] = new_lflows[lswitch->n_clflows - 1];
     nbrec_logical_switch_verify_clflows(lswitch);
-    nbrec_logical_switch_set_clflows(lswitch, new_lflows, lswitch->n_clflows - 1);
+    nbrec_logical_switch_set_clflows(lswitch, new_lflows,
+                                        lswitch->n_clflows - 1);
     free(new_lflows);
 
     /* Delete 'lflow' from the IDL.  This won't have a real effect on the
@@ -1185,7 +1186,8 @@ nbctl_lflow_del(struct ctl_context *ctx)
 static void
 nbctl_lflow_add(struct ctl_context *ctx)
 {
-    /* "lflow-add", 6, 6, "LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID" */
+    /* "lflow-add", 6, 7, "LSWITCH DIRECTION PRIORITY MATCH ACTION
+     *                                                FLOWID FLOWTYPE" */
     const char *match = ctx->argv[4];
     const char *action = ctx->argv[5];
     const struct nbrec_logical_switch *lswitch;
@@ -1193,6 +1195,7 @@ nbctl_lflow_add(struct ctl_context *ctx)
     const char *direction = parse_direction(ctx->argv[2]);
     int64_t priority = parse_priority(ctx->argv[3]);
     const char *flow_id = ctx->argv[6];
+    const char *flow_type = ctx->argc == 8 ? ctx->argv[7] : "fwd";
 
     /* create a new custom logical flow */
     struct nbrec_custom_lflow *lflow = nbrec_custom_lflow_insert(ctx->txn);
@@ -1201,6 +1204,7 @@ nbctl_lflow_add(struct ctl_context *ctx)
     nbrec_custom_lflow_set_flow_id(lflow, flow_id);
     nbrec_custom_lflow_set_match(lflow, match);
     nbrec_custom_lflow_set_action(lflow, action);
+    nbrec_custom_lflow_set_flow_type(lflow, flow_type);
 
     if (shash_find(&ctx->options, "--log") != NULL) {
         nbrec_custom_lflow_set_log(lflow, true);
@@ -1227,6 +1231,11 @@ static const struct ctl_table_class tables[] = {
       {NULL, NULL, NULL}}},
 
     {&nbrec_table_acl,
+     {{NULL, NULL, NULL},
+      {NULL, NULL, NULL}}},
+
+    {&nbrec_table_custom_lflow,
+     /*{{&nbrec_table_custom_lflow, &nbrec_custom_lflow_col_flow_id, NULL},*/
      {{NULL, NULL, NULL},
       {NULL, NULL, NULL}}},
 
@@ -1496,7 +1505,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       "", RO },
 
     /* lflow commands. */
-    { "lflow-add", 6, 6, "LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID", NULL,
+    { "lflow-add", 6, 7, "LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID [FLOWTYPE]", NULL,
       nbctl_lflow_add, NULL, "", RW },
     { "lflow-del", 2, 2, "LSWITCH FLOWID", NULL,
       nbctl_lflow_del, NULL, "", RW },

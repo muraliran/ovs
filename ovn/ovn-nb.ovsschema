@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "2.1.2",
-    "cksum": "1581357832 6188",
+    "version": "2.5.9",
+    "cksum": "1019959207 6365",
     "tables": {
         "Logical_Switch": {
             "columns": {
@@ -59,10 +59,11 @@
                                               "minInteger": 0,
                                               "maxInteger": 32767}}},
                 "direction": {"type": {"key": {"type": "string",
-                                            "enum": ["set", ["from-lport", "to-lport"]]}}},
+                                "enum": ["set", ["from-lport", "to-lport"]]}}},
                 "match": {"type": "string"},
                 "action": {"type": {"key": {"type": "string",
-                                            "enum": ["set", ["allow", "allow-related", "drop", "reject"]]}}},
+                                "enum": ["set", ["allow", "allow-related",
+                                                  "drop", "reject"]]}}},
                 "log": {"type": "boolean"},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
@@ -75,10 +76,12 @@
                                               "minInteger": 0,
                                               "maxInteger": 32767}}},
                 "direction": {"type": {"key": {"type": "string",
-                                            "enum": ["set", ["from-lport", "to-lport"]]}}},
+                                "enum": ["set", ["from-lport", "to-lport"]]}}},
                 "match": {"type": "string"},
                 "action": {"type": "string"},
                 "log": {"type": "boolean"},
+                "flow_type": {"type": {"key": {"type": "string",
+                                "enum": ["set", ["fwd", "next"]]}}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
@@ -92,8 +95,8 @@
                                    "min": 0,
                                    "max": "unlimited"}},
                 "static_routes": {"type": {"key": {"type": "uuid",
-                                            "refTable": "Logical_Router_Static_Route",
-                                            "refType": "strong"},
+                                     "refTable": "Logical_Router_Static_Route",
+                                     "refType": "strong"},
                                    "min": 0,
                                    "max": "unlimited"}},
                 "default_gw": {"type": {"key": "string", "min": 0, "max": 1}},
@@ -118,7 +121,8 @@
             "columns": {
                 "ip_prefix": {"type": "string"},
                 "nexthop": {"type": "string"},
-                "output_port": {"type": {"key": "string", "min": 0, "max": 1}}},
+                "output_port": {"type": {"key": "string",
+                                           "min": 0, "max": 1}}},
             "isRoot": false}
     }
 }

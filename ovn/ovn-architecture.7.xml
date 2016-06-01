@@ -97,8 +97,8 @@
         representation of logical network configuration passed down by the
         OVN/CMS Plugin.  The database schema is meant to be ``impedance
         matched'' with the concepts used in a CMS, so that it directly supports
-        notions of logical switches, routers, ACLs, and so on.  See
-        <code>ovn-nb</code>(5) for details.
+        notions of logical switches, routers, ACLs, Custom Logical Flows and so
+        on. See <code>ovn-nb</code>(5) for details.
       </p>
 
       <p>
