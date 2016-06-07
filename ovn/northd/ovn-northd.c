@@ -94,15 +94,13 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        3, "ls_in_pre_acl")      \
     PIPELINE_STAGE(SWITCH, IN,  ACL,            4, "ls_in_acl")          \
     PIPELINE_STAGE(SWITCH, IN,  ARP_RSP,        5, "ls_in_arp_rsp")      \
-    PIPELINE_STAGE(SWITCH, IN,  CUSTOM_FWD,     6, "ls_in_cust_fwd")     \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        7, "ls_in_l2_lkup")      \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        6, "ls_in_l2_lkup")      \
                                                                       \
     /* Logical switch egress stages. */                               \
     PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,     0, "ls_out_pre_acl")     \
     PIPELINE_STAGE(SWITCH, OUT, ACL,         1, "ls_out_acl")         \
     PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP, 2, "ls_out_port_sec_ip")    \
     PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2, 3, "ls_out_port_sec_l2")    \
-    PIPELINE_STAGE(SWITCH, OUT, CUSTOM_FWD,  4, "ls_out_cust_fwd")    \
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,   0, "lr_in_admission")    \
@@ -1503,7 +1501,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
 }
 
 /* Build custom logical flows */
-static void
+/*static void
 build_clflows(struct ovn_datapath *od, struct hmap *lflows)
 {
     for (size_t i = 0; i < od->nbs->n_clflows; i++) {
@@ -1518,7 +1516,7 @@ build_clflows(struct ovn_datapath *od, struct hmap *lflows)
                                                 lflow->match, lflow->action);
         }
     }
-}
+}*/
 
 static void
 build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
@@ -1681,7 +1679,17 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
             continue;
         }
 
-        build_clflows(od, lflows);
+        /*build_clflows(od, lflows);*/
+        for (size_t i = 0; i < od->nbs->n_clflows; i++) {
+            struct nbrec_custom_lflow *lflow = od->nbs->clflows[i];
+
+            if (lflow->flow_type == CLFLOW_FORWARD) {
+                bool ingress = !strcmp(lflow->direction, "from-lport") ?
+                                                                 true :false;
+                ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, lflow->priority,
+                                                lflow->match, lflow->action);
+            }
+        }
     }
 
     /* Ingress table 6: Destination lookup, broadcast and multicast handling
