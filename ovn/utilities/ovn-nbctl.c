@@ -1513,7 +1513,8 @@ nbctl_lflow_add(struct ctl_context *ctx)
     const char *direction = parse_direction(ctx->argv[2]);
     int64_t priority = parse_priority(ctx->argv[3]);
     const char *flow_id = ctx->argv[6];
-    const char *flow_type = ctx->argc == 8 ? ctx->argv[7] : "fwd";
+    /* Only "fwd" supported currently */
+    const char *flow_type = "fwd";
 
     /* create a new custom logical flow */
     struct nbrec_custom_lflow *lflow = nbrec_custom_lflow_insert(ctx->txn);

@@ -1683,11 +1683,13 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         for (size_t i = 0; i < od->nbs->n_clflows; i++) {
             struct nbrec_custom_lflow *lflow = od->nbs->clflows[i];
 
-            if (lflow->flow_type == CLFLOW_FORWARD) {
+            if (!strcmp(lflow->flow_type, "fwd")) {
                 bool ingress = !strcmp(lflow->direction, "from-lport") ?
                                                                  true :false;
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, lflow->priority,
-                                                lflow->match, lflow->action);
+                if (ingress) {
+                    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, lflow->priority,
+                                                       lflow->match, lflow->action);
+                } /* egress to be impl */
             }
         }
     }
