@@ -94,7 +94,8 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        3, "ls_in_pre_acl")      \
     PIPELINE_STAGE(SWITCH, IN,  ACL,            4, "ls_in_acl")          \
     PIPELINE_STAGE(SWITCH, IN,  ARP_RSP,        5, "ls_in_arp_rsp")      \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        6, "ls_in_l2_lkup")      \
+    PIPELINE_STAGE(SWITCH, IN,  CUSTOM_FWD,     6, "ls_in_cust_fwd")      \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        7, "ls_in_l2_lkup")      \
                                                                       \
     /* Logical switch egress stages. */                               \
     PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,     0, "ls_out_pre_acl")     \
@@ -1500,24 +1501,6 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     }
 }
 
-/* Build custom logical flows */
-/*static void
-build_clflows(struct ovn_datapath *od, struct hmap *lflows)
-{
-    for (size_t i = 0; i < od->nbs->n_clflows; i++) {
-        struct nbrec_custom_lflow *lflow = od->nbs->clflows[i];
-
-        if (lflow->flow_type == CLFLOW_FORWARD) {
-            bool ingress = !strcmp(lflow->direction, "from-lport") ?
-                                                                 true :false;
-            enum ovn_stage stage = ingress ? S_SWITCH_IN_CUSTOM_FWD :
-                                                S_SWITCH_OUT_CUSTOM_FWD;
-            ovn_lflow_add(lflows, od, stage, lflow->priority,
-                                                lflow->match, lflow->action);
-        }
-    }
-}*/
-
 static void
 build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *lflows, struct hmap *mcgroups)
@@ -1673,13 +1656,20 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_RSP, 0, "1", "next;");
     }
 
-    /* Ingress table 6: define custom lflows with priority higher than 100 */
+    /* Ingress table 6: define custom lflows with priority user defined typically 100 */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
         }
 
-        /*build_clflows(od, lflows);*/
+        /* forward default to next table */
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CUSTOM_FWD, 0, "1", "next;");
+    }
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs) {
+            continue;
+        }
+
         for (size_t i = 0; i < od->nbs->n_clflows; i++) {
             struct nbrec_custom_lflow *lflow = od->nbs->clflows[i];
 
@@ -1687,14 +1677,14 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                 bool ingress = !strcmp(lflow->direction, "from-lport") ?
                                                                  true :false;
                 if (ingress) {
-                    ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, lflow->priority,
+                    ovn_lflow_add(lflows, od, S_SWITCH_IN_CUSTOM_FWD, lflow->priority,
                                                        lflow->match, lflow->action);
                 } /* egress to be impl */
             }
         }
     }
 
-    /* Ingress table 6: Destination lookup, broadcast and multicast handling
+    /* Ingress table 7: Destination lookup, broadcast and multicast handling
      * (priority 100). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbs) {
@@ -1714,7 +1704,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                       "outport = \""MC_FLOOD"\"; output;");
     }
 
-    /* Ingress table 6: Destination lookup, unicast handling (priority 50), */
+    /* Ingress table 7: Destination lookup, unicast handling (priority 50), */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbs) {
             continue;
@@ -1751,7 +1741,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 6: Destination lookup for unknown MACs (priority 0). */
+    /* Ingress table 7: Destination lookup for unknown MACs (priority 0). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
