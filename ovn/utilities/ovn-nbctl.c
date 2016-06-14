@@ -1489,10 +1489,12 @@ nbctl_lflow_del(struct ctl_context *ctx)
         return;
     }
 
+    /* The tags refered as flow_id here may be attached to a set
+     * of flows iall of which comprise a custom flow in aggregate.
+     * So we have to delete all flows with the tag */
     for (size_t i = 0; i < lswitch->n_clflows; i++) {
         if (!strcmp(clflow->flow_id, lswitch->clflows[i]->flow_id)) {
             remove_clflow(lswitch, i);
-            return;
         }
     }
 
