@@ -1276,6 +1276,7 @@ nbctl_lflow_del(struct ctl_context *ctx)
     for (size_t i = 0; i < lswitch->n_clflows; i++) {
         if (!strcmp(clflow->flow_id, lswitch->clflows[i]->flow_id)) {
             remove_clflow(lswitch, i);
+            return;
         }
     }
 
