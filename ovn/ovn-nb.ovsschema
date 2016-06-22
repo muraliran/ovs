@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "3.0.0",
-    "cksum": "966653851 6600",
+    "version": "3.1.0",
+    "cksum": "488227442 7353",
     "tables": {
         "Logical_Switch": {
             "columns": {
@@ -101,6 +101,11 @@
                                    "max": "unlimited"}},
                 "default_gw": {"type": {"key": "string", "min": 0, "max": 1}},
                 "enabled": {"type": {"key": "boolean", "min": 0, "max": 1}},
+                "nat": {"type": {"key": {"type": "uuid",
+                                         "refTable": "NAT",
+                                         "refType": "strong"},
+                                 "min": 0,
+                                 "max": "unlimited"}},
                 "options": {
                      "type": {"key": "string",
                               "value": "string",
@@ -126,8 +131,17 @@
             "columns": {
                 "ip_prefix": {"type": "string"},
                 "nexthop": {"type": "string"},
-                "output_port": {"type": {"key": "string",
-                                           "min": 0, "max": 1}}},
+                "output_port": {"type": {"key": "string", "min": 0, "max": 1}}},
+            "isRoot": false},
+        "NAT": {
+            "columns": {
+                "external_ip": {"type": "string"},
+                "logical_ip": {"type": "string"},
+                "type": {"type": {"key": {"type": "string",
+                                           "enum": ["set", ["dnat",
+                                                             "snat",
+                                                             "dnat_and_snat"
+                                                               ]]}}}},
             "isRoot": false}
     }
 }

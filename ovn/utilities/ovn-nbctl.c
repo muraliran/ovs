@@ -1988,6 +1988,11 @@ static const struct ctl_table_class tables[] = {
        NULL},
       {NULL, NULL, NULL}}},
 
+    {&nbrec_table_nat,
+     {{&nbrec_table_nat, NULL,
+       NULL},
+      {NULL, NULL, NULL}}},
+
     {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
 };
 
