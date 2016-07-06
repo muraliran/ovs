@@ -249,7 +249,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
             }
             shash_add_nocopy(local_options,
                              xasprintf("--%s", options[idx].name),
-                             optarg ? xstrdup(optarg) : NULL);
+                             nullable_xstrdup(optarg));
             break;
 
         case 'h':
@@ -777,6 +777,10 @@ static const struct ctl_table_class tables[] = {
 
     {&sbrec_table_mac_binding,
      {{&sbrec_table_mac_binding, &sbrec_mac_binding_col_logical_port, NULL},
+      {NULL, NULL, NULL}}},
+
+    {&sbrec_table_address_set,
+     {{&sbrec_table_address_set, &sbrec_address_set_col_name, NULL},
       {NULL, NULL, NULL}}},
 
     {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
