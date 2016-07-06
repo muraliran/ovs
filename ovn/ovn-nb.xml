@@ -580,7 +580,6 @@
 
     </column>
 
-<<<<<<< HEAD
     <column name="action">
       <p>The action to take when the flow rules matches.</p>
     </column>
@@ -608,7 +607,16 @@
 
       <p>
         The <code>next_hop</code> is not implemented yet.
-=======
+      </p>
+    </column>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
+
   <table name="Address_Set" title="Address Sets">
     <p>
       Each row in this table represents a named set of addresses.
@@ -677,7 +685,6 @@
         <code>vips</code> column.  If this column is empty and a port number
         is provided as part of <code>vips</code> column, OVN assumes the
         protocol to be <code>tcp</code>.
->>>>>>> upstream/master
       </p>
     </column>
 
@@ -687,10 +694,7 @@
       </column>
     </group>
   </table>
-<<<<<<< HEAD
-=======
 
->>>>>>> upstream/master
   <table name="ACL" title="Access Control List (ACL) rule">
     <p>
       Each row in this table represents one ACL rule for a logical switch
