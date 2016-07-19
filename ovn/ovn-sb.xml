@@ -344,7 +344,7 @@
       the <code>output</code> as a no-op.  In the common case, where they are
       different, the packet enters the egress pipeline.  This transition to the
       egress pipeline discards register data, e.g. <code>reg0</code> ...
-      <code>reg4</code> and connection tracking state, to achieve
+      <code>reg9</code> and connection tracking state, to achieve
       uniform behavior regardless of whether the egress pipeline is on a
       different hypervisor (because registers aren't preserve across
       tunnel encapsulation).
@@ -738,8 +738,20 @@
         symbols, only names within the flow's logical datapath may be used.
       </p>
 
+      <p>
+        The <code>reg</code><var>X</var> symbols are 32-bit integers.
+        The <code>xxreg</code><var>X</var> symbols are 128-bit integers,
+        which overlay four of the 32-bit registers: <code>xxreg0</code>
+        overlays <code>reg0</code> through <code>reg3</code>, with
+        <code>reg0</code> supplying the most-significant bits of
+        <code>xxreg0</code> and <code>reg3</code> the least-signficant.
+        <code>xxreg1</code> similarly overlays <code>reg4</code> through
+        <code>reg7</code>.
+      </p>
+
       <ul>
-        <li><code>reg0</code>...<code>reg4</code></li>
+        <li><code>reg0</code>...<code>reg9</code></li>
+        <li><code>xxreg0</code> <code>xxreg1</code></li>
         <li><code>inport</code> <code>outport</code></li>
         <li><code>eth.src</code> <code>eth.dst</code> <code>eth.type</code></li>
         <li><code>vlan.tci</code> <code>vlan.vid</code> <code>vlan.pcp</code> <code>vlan.present</code></li>
@@ -970,9 +982,8 @@
             <code>ct_mark</code> and/or <code>ct_label</code> will be set to the
             values indicated by <var>value[/mask]</var> on the connection
             tracking entry. <code>ct_mark</code> is a 32-bit field.
-            <code>ct_label</code> is technically a 128-bit field, though OVN
-            currently only supports 64-bits and will later be extended to
-            support the full 128-bits.
+            <code>ct_label</code> is a 128-bit field. The <var>value[/mask]</var>
+            should be specified in hex string if more than 64bits are to be used.
           </p>
 
           <p>
@@ -1476,8 +1487,8 @@ tcp.flags = RST;
           <dd>
             The physical location of this L2 gateway.  To successfully identify a
             chassis, this column must be a <ref table="Chassis"/> record.
-            This is populated by an entity external to OVN, either manually or by
-            a CMS.
+            This is populated by <code>ovn-controller</code> based on the value
+            of the <code>options:l2gateway-chassis</code> column in this table.
           </dd>
         </dl>
 
@@ -1657,6 +1668,10 @@ tcp.flags = RST;
         </p>
       </column>
 
+      <column name="options" key="l2gateway-chassis">
+        Required. The <code>chassis</code> in which the port resides.
+      </column>
+
       <column name="tag">
         If set, indicates that the gateway is connected to a specific
         VLAN on the physical network. The VLAN ID is used to match
@@ -1806,6 +1821,9 @@ tcp.flags = RST;
 
     <column name="mac">
       The Ethernet address to which the IP is bound.
+    </column>
+    <column name="datapath">
+      The logical datapath to which the logical port belongs.
     </column>
   </table>
 
