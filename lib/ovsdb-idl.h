@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -251,7 +251,8 @@ void ovsdb_idl_txn_add_comment(struct ovsdb_idl_txn *, const char *, ...)
 void ovsdb_idl_txn_set_dry_run(struct ovsdb_idl_txn *);
 void ovsdb_idl_txn_increment(struct ovsdb_idl_txn *,
                              const struct ovsdb_idl_row *,
-                             const struct ovsdb_idl_column *);
+                             const struct ovsdb_idl_column *,
+                             bool force);
 void ovsdb_idl_txn_destroy(struct ovsdb_idl_txn *);
 void ovsdb_idl_txn_wait(const struct ovsdb_idl_txn *);
 enum ovsdb_idl_txn_status ovsdb_idl_txn_commit(struct ovsdb_idl_txn *);
@@ -295,6 +296,14 @@ struct ovsdb_idl_loop {
     unsigned int precommit_seqno;
 
     struct ovsdb_idl_txn *open_txn;
+
+    /* These members allow a client a simple, stateless way to keep track of
+     * transactions that commit: when a transaction commits successfully,
+     * ovsdb_idl_loop_commit_and_wait() copies 'next_cfg' to 'cur_cfg'.  Thus,
+     * the client can set 'next_cfg' to a value that indicates a successful
+     * commit and check 'cur_cfg' on each iteration. */
+    int64_t cur_cfg;
+    int64_t next_cfg;
 };
 
 #define OVSDB_IDL_LOOP_INITIALIZER(IDL) { .idl = (IDL) }

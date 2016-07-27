@@ -1,3 +1,47 @@
+# trim_zeros()
+#
+# Removes pairs of trailing zeros from lines of text.  Useful for
+# fairly comparing Ethernet packets that might have been padded out to
+# a minimum (e.g. 64-byte) length.
+m4_divert_text([PREPARE_TESTS],
+  [trim_zeros() {
+     sed 's/\(00\)\{1,\}$//' "$@"
+   }
+])
+
+# OVN_CHECK_PACKETS([PCAP], [EXPECTED])
+#
+# This compares packets read from PCAP, in pcap format, to those read
+# from EXPECTED, which is a text file containing packets as hex
+# strings, one per line.  If PCAP contains fewer packets than
+# EXPECTED, it waits up to 10 seconds for more packets to appear.
+#
+# The implementation is an m4 macro that is mostly implemented in
+# terms of a shell function.  This reduces the size of the generated
+# testsuite file since the shell function is only emitted once even
+# when this macro is invoked many times.
+m4_divert_text([PREPARE_TESTS],
+  [ovn_check_packets__ () {
+     echo
+     echo "checking packets in $1 against $2:"
+     rcv_pcap=$1
+     rcv_text=`echo "$rcv_pcap.packets" | sed 's/\.pcap//'`
+     exp_text=$2
+     exp_n=`wc -l < "$exp_text"`
+     ovs_wait_cond () {
+	  $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $rcv_pcap | trim_zeros > $rcv_text
+	  rcv_n=`wc -l < "$rcv_text"`
+	  test $rcv_n -ge $exp_n
+     }
+     ovs_wait || echo "expected $exp_n packets, only received $rcv_n"
+
+     trim_zeros $exp_text | sort > expout
+   }
+])
+m4_define([OVN_CHECK_PACKETS],
+  [ovn_check_packets__ "$1" "$2"
+   AT_CHECK([sort $rcv_text], [0], [expout])])
+
 AT_BANNER([OVN components])
 
 AT_SETUP([ovn -- lexer])
@@ -720,9 +764,8 @@ ovn-nbctl acl-add lsw0 to-lport 1000 'eth.type == 0x1237 && eth.src == $set1 && 
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Given the name of a logical port, prints the name of the hypervisor
 # on which it is located.
@@ -737,9 +780,6 @@ vif_to_hv() {
 # digits) and Ethernet type ETHTYPE (4 hex digits).  The OUTPORTs (zero or
 # more) list the VIFs on which the packet should be received.  INPORT and the
 # OUTPORTs are specified as logical switch port numbers, e.g. 11 for vif11.
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
 for i in 1 2 3; do
     for j in 1 2 3; do
         : > $i$j.expected
@@ -904,6 +944,16 @@ done
 # set address for lp13 with invalid characters.
 # lp13 should be configured with only 192.168.0.13.
 ovn-nbctl lsp-set-addresses lp13 "f0:00:00:00:00:13 192.168.0.13 invalid 192.169.0.13"
+
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
+# Wait for ovs-vswitchd to catch up.
+# XXX We should make this possible via OpenFlow, and after that we should
+# make ovn-controller do it for us.
+for i in 1 2 3; do
+    as hv$i ovs-appctl revalidator/purge
+done
+
 sip=`ip_to_hex 192 168 0 11`
 tip=`ip_to_hex 192 168 0 13`
 test_arp 11 f00000000011  $sip $tip f00000000013
@@ -911,10 +961,6 @@ test_arp 11 f00000000011  $sip $tip f00000000013
 tip=`ip_to_hex 192 169 0 13`
 #arp request for 192.169.0.13 should be flooded
 test_arp 11 f00000000011  $sip $tip
-
-# Allow some time for packet forwarding.
-# XXX This can be improved.
-sleep 1
 
 # dump information and flows with counters
 ovn-sbctl dump-flows -- list multicast_group
@@ -930,15 +976,11 @@ as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int
 echo "------ hv3 dump ------"
 as hv3 ovs-vsctl show
 as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int
+
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
     for j in 1 2 3; do
-        file=hv$i/vif$i$j-tx.pcap
-        echo $file
-        $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i$j.packets
-        sort $i$j.expected > expout
-        AT_CHECK([sort $i$j.packets], [0], [expout])
-        echo
+        OVN_CHECK_PACKETS([hv$i/vif$i$j-tx.pcap], [$i$j.expected])
     done
 done
 
@@ -1038,9 +1080,6 @@ vif_to_hv() {
 # digits) and Ethernet type ETHTYPE (4 hex digits).  The OUTPORTs (zero or
 # more) list the VIFs on which the packet should be received.  INPORT and the
 # OUTPORTs are specified as logical switch port numbers, e.g. 11 for vif11.
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
 for i in 1 2; do
     for j in 1 2 3 4 5; do
         : > $i$j.expected
@@ -1097,10 +1136,6 @@ test_packet 13 f00000000021 f00000000013 1321
 test_packet 23 f00000000011 f00000000023 2311
 test_packet 23 f00000000021 f00000000023 2321
 
-# Allow some time for packet forwarding.
-# XXX This can be improved.
-sleep 1
-
 # Dump a bunch of info helpful for debugging if there's a failure.
 
 echo "------ OVN dump ------"
@@ -1118,12 +1153,7 @@ as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int
 # Now check the packets actually received against the ones expected.
 for i in 1 2; do
     for j in 1 2 3 4 5; do
-        file=hv$i/vif$i$j-tx.pcap
-        echo $file
-        $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i$j.packets
-        sort $i$j.expected > expout
-        AT_CHECK([sort $i$j.packets], [0], [expout])
-        echo
+        OVN_CHECK_PACKETS([hv$i/vif$i$j-tx.pcap], [$i$j.expected])
     done
 done
 
@@ -1223,9 +1253,6 @@ sleep 1
 # digits) and Ethernet type ETHTYPE (4 hex digits).  The OUTPORTs (zero or
 # more) list the VIFs on which the packet should be received.  INPORT and the
 # OUTPORTs are specified as logical switch port numbers, e.g. 1 for vif1.
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
 for i in 1 2 3; do
     : > $i.expected
 done
@@ -1272,10 +1299,6 @@ for s in 1 2 3; do
     test_packet $s f0000000ffff f0000000000$s 0${s}66 $unknown           #3
 done
 
-# Allow some time for packet forwarding.
-# XXX This can be improved.
-sleep 1
-
 # dump information with counters
 echo "------ OVN dump ------"
 ovn-nbctl show
@@ -1300,12 +1323,7 @@ AT_CHECK([as hv3 ovs-ofctl -O OpenFlow13 show br-int], [1], [],
 
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
-    file=hv$i/vif$i-tx.pcap
-    echo $file
-    $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i.packets
-    sort $i.expected > expout
-    AT_CHECK([sort $i.packets], [0], [expout])
-    echo
+    OVN_CHECK_PACKETS([hv$i/vif$i-tx.pcap], [$i.expected])
 done
 
 # Gracefully terminate daemons
@@ -1373,9 +1391,8 @@ ovs-vsctl add-port br-phys vif3 -- set Interface vif3 options:tx_pcap=hv3/vif3-t
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # test_packet INPORT DST SRC ETHTYPE OUTPORT...
 #
@@ -1384,9 +1401,6 @@ sleep 1
 # digits) and Ethernet type ETHTYPE (4 hex digits).  The OUTPORTs (zero or
 # more) list the VIFs on which the packet should be received.  INPORT and the
 # OUTPORTs are specified as lport numbers, e.g. 1 for vif1.
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
 for i in 1 2 3; do
     : > $i.expected
 done
@@ -1429,10 +1443,6 @@ for s in 1 2 3 ; do
     test_packet $s f0000000ffff f0000000000$s 0${s}66 $unknown           #4
 done
 
-# Allow some time for packet forwarding.
-# XXX This can be improved.
-sleep 3
-
 echo "------ ovn-nbctl show ------"
 ovn-nbctl show
 echo "------ ovn-sbctl show ------"
@@ -1466,12 +1476,7 @@ as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-phys
 
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
-    file=hv$i/vif$i-tx.pcap
-    echo $file
-    $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i.packets
-    sort $i.expected > expout
-    AT_CHECK([sort $i.packets], [0], [expout])
-    echo
+    OVN_CHECK_PACKETS([hv$i/vif$i-tx.pcap], [$i.expected])
 done
 AT_CLEANUP
 
@@ -1582,9 +1587,8 @@ done
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # test_ip INPORT SRC_MAC DST_MAC SRC_IP DST_IP OUTPORT...
 #
@@ -1593,9 +1597,6 @@ sleep 1
 # digits) and Ethernet type ETHTYPE (4 hex digits).  The OUTPORTs (zero or
 # more) list the VIFs on which the packet should be received.  INPORT and the
 # OUTPORTs are specified as logical switch port numbers, e.g. 123 for vif123.
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
 for i in 1 2 3; do
     for j in 1 2 3; do
         for k in 1 2 3; do
@@ -1869,10 +1870,6 @@ for is in 1 2 3; do
   done
 done
 
-# Allow some time for packet forwarding.
-# XXX This can be improved.
-sleep 1
-
 ovn-sbctl -f csv -d bare --no-heading \
     -- --columns=logical_port,ip,mac list mac_binding > mac_bindings
 
@@ -1880,12 +1877,8 @@ ovn-sbctl -f csv -d bare --no-heading \
 for i in 1 2 3; do
     for j in 1 2 3; do
         for k in 1 2 3; do
-            file=hv`vif_to_hv $i$j$k`/vif$i$j$k-tx.pcap
-            echo $file
-            $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i$j$k.packets
-            sort $i$j$k.expected > expout
-            AT_CHECK([sort $i$j$k.packets], [0], [expout])
-            echo
+	    OVN_CHECK_PACKETS([hv`vif_to_hv $i$j$k`/vif$i$j$k-tx.pcap],
+	                      [$i$j$k.expected])
         done
     done
 done
@@ -1941,9 +1934,8 @@ done
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Given the name of a logical port, prints the name of the hypervisor
 # on which it is located.
@@ -1951,10 +1943,6 @@ vif_to_hv() {
     echo hv${1%?}
 }
 
-
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
 for i in 1 2 3; do
     for j in 1 2 3; do
         : > $i$j.expected
@@ -2252,11 +2240,6 @@ tip=`ip_to_hex 224 0 0 4`
 # with dst ip 224.0.0.4  should be received by lsp13
 test_ip 33 f00000000033 f00000000013 $sip $tip 13
 
-# Allow some time for packet forwarding.
-
-# XXX This can be improved.
-sleep 1
-
 #dump information including flow counters
 ovn-nbctl show
 ovn-sbctl dump-flows -- list multicast_group
@@ -2279,12 +2262,7 @@ as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
     for j in 1 2 3; do
-        file=hv$i/vif$i$j-tx.pcap
-        echo $file
-        $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i$j.packets
-        sort $i$j.expected > expout
-        AT_CHECK([sort $i$j.packets], [0], [expout])
-        echo
+        OVN_CHECK_PACKETS([hv$i/vif$i$j-tx.pcap], [$i$j.expected])
     done
 done
 
@@ -2364,16 +2342,12 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Send ip packets between the two ports.
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 
 # Packet to send.
@@ -2409,11 +2383,9 @@ as hv2 ovs-ofctl dump-flows br-int
 # Packet to Expect
 src_mac="000000010204"
 dst_mac="f00000010204"
-expected=${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000
+echo "${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/vif1-tx.pcap | trim_zeros > received.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received.packets], [0], [expout])
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1],[hv2])
 
@@ -2465,17 +2437,12 @@ ovs-vsctl -- add-port br-int vif2 -- \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=1
 
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Send ip packets between the two ports.
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 
 # Packet to send.
@@ -2508,6 +2475,13 @@ as hv1 ovs-ofctl dump-flows br-int
 #Disable router R1
 ovn-nbctl set Logical_Router R1 enabled=false
 
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
+# Wait for ovs-vswitchd to catch up.
+# XXX We should make this possible via OpenFlow, and after that we should
+# make ovn-controller do it for us.
+as hv1 ovs-appctl revalidator/purge
+
 echo "---------SB dump-----"
 ovn-sbctl list datapath_binding
 echo "---------------------"
@@ -2522,12 +2496,9 @@ as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
 # Packet to Expect
 expect_src_mac="000000010203"
 expect_dst_mac="f00000010204"
-expected=${expect_dst_mac}${expect_src_mac}08004500001c000000003f110100${src_ip}${dst_ip}0035111100080000
+echo "${expect_dst_mac}${expect_src_mac}08004500001c000000003f110100${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap | trim_zeros > received.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received.packets], [0], [expout])
-
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 
 as hv1
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
@@ -2601,17 +2572,12 @@ ovs-vsctl -- add-port br-int vif2 -- \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=1
 
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Send ip packets between the two ports.
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 
 # Packet to send.
@@ -2643,6 +2609,13 @@ as hv1 ovs-ofctl dump-flows br-int
 #Disable router R1
 ovn-nbctl set Logical_Router R1 enabled=false
 
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
+# Wait for ovs-vswitchd to catch up.
+# XXX We should make this possible via OpenFlow, and after that we should
+# make ovn-controller do it for us.
+as hv1 ovs-appctl revalidator/purge
+
 echo "---------SB dump-----"
 ovn-sbctl list datapath_binding
 echo "---------------------"
@@ -2652,21 +2625,14 @@ echo "---------------------"
 echo "------ hv1 dump ----------"
 as hv1 ovs-ofctl dump-flows br-int
 
-# Allow some time for the disabling of logical router R1 to propagate.
-# XXX This should be more systematic.
-sleep 1
-
 as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
 
 # Packet to Expect
 expect_src_mac="000000010204"
 expect_dst_mac="f00000010204"
-expected=${expect_dst_mac}${expect_src_mac}08004500001c000000003f110100${src_ip}${dst_ip}0035111100080000
+echo "${expect_dst_mac}${expect_src_mac}08004500001c000000003f110100${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap | trim_zeros > received.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received.packets], [0], [expout])
-
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1])
 
@@ -2761,15 +2727,11 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 
 # Send ip packets between foo1 and alice1
@@ -2812,22 +2774,18 @@ src_mac="000000010205"
 dst_mac="f00000010205"
 src_ip=`ip_to_hex 192 168 1 2`
 dst_ip=`ip_to_hex 172 16 2 2`
-expected=${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000
+echo "${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/vif1-tx.pcap | trim_zeros > received.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received.packets], [0], [expout])
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
 # Packet to Expect at alice1
 src_mac="000000010204"
 dst_mac="f00000010204"
 src_ip=`ip_to_hex 192 168 1 2`
 dst_ip=`ip_to_hex 172 16 1 2`
-expected=${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000
+echo "${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap | trim_zeros > received1.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received1.packets], [0], [expout])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1],[hv2])
 
@@ -2864,15 +2822,8 @@ AT_CHECK([ovn-nbctl lsp-set-options ln_port network_name=physnet1])
 AT_CHECK([ovs-vsctl add-port br-int localvif1 -- set Interface localvif1 external_ids:iface-id=localvif1])
 
 # Wait for packet to be received.
-OVS_WAIT_UNTIL([test `wc -c < "hv/snoopvif-tx.pcap"` -ge 50])
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
-}
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv/snoopvif-tx.pcap | trim_zeros > packets
-expected="fffffffffffff0000000000108060001080006040001f00000000001c0a80102000000000000c0a80102"
-echo $expected > expout
-AT_CHECK([sort packets], [0], [expout])
-cat packets
+echo "fffffffffffff0000000000108060001080006040001f00000000001c0a80102000000000000c0a80102" > expected
+OVN_CHECK_PACKETS([hv/snoopvif-tx.pcap], [expected])
 
 # Delete the localnet ports.
 AT_CHECK([ovs-vsctl del-port localvif1])
@@ -2989,15 +2940,11 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 
 # Send ip packets between foo1 and alice1
@@ -3046,24 +2993,290 @@ src_mac="000003010203"
 dst_mac="f00000010205"
 src_ip=`ip_to_hex 192 168 1 2`
 dst_ip=`ip_to_hex 10 32 1 2`
-expected=${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000
+echo "${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/vif1-tx.pcap | trim_zeros > received.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received.packets], [0], [expout])
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
 # Packet to Expect at alice1
 src_mac="000002010203"
 dst_mac="f00000010204"
 src_ip=`ip_to_hex 192 168 1 2`
 dst_ip=`ip_to_hex 172 16 1 2`
-expected=${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000
+echo "${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}0035111100080000" > expected
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap | trim_zeros > received1.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received1.packets], [0], [expout])
+OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1],[hv2])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- dhcpv4 : 1 HV, 2 LS, 2 LSPs/LS])
+AT_KEYWORDS([dhcpv4])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+ovn_start
+
+ovn-nbctl ls-add ls1
+
+ovn-nbctl lsp-add ls1 ls1-lp1 \
+-- lsp-set-addresses ls1-lp1 "f0:00:00:00:00:01 10.0.0.4"
+
+ovn-nbctl lsp-set-port-security ls1-lp1 "f0:00:00:00:00:01 10.0.0.4"
+
+ovn-nbctl lsp-add ls1 ls1-lp2 \
+-- lsp-set-addresses ls1-lp2 "f0:00:00:00:00:02 10.0.0.6 20.0.0.4"
+
+ovn-nbctl lsp-set-port-security ls1-lp2 "f0:00:00:00:00:02 10.0.0.6 20.0.0.4"
+
+ovn-nbctl ls-add ls2
+ovn-nbctl lsp-add ls2 ls2-lp1 \
+-- lsp-set-addresses ls2-lp1 "f0:00:00:00:00:03 30.0.0.6 40.0.0.4"
+ovn-nbctl lsp-set-port-security ls2-lp1 "f0:00:00:00:00:03 30.0.0.6 40.0.0.4"
+ovn-nbctl lsp-add ls2 ls2-lp2 \
+-- lsp-set-addresses ls2-lp2 "f0:00:00:00:00:04 30.0.0.7"
+ovn-nbctl lsp-set-port-security ls2-lp2 "f0:00:00:00:00:04 30.0.0.7"
+
+ovn-nbctl -- --id=@d1 create DHCP_Options cidr=10.0.0.0/24 \
+options="\"server_id\"=\"10.0.0.1\" \"server_mac\"=\"ff:10:00:00:00:01\" \
+\"lease_time\"=\"3600\" \"router\"=\"10.0.0.1\"" \
+-- add Logical_Switch_Port ls1-lp1 dhcpv4_options @d1 \
+-- add Logical_Switch_Port ls1-lp2 dhcpv4_options @d1
+
+ovn-nbctl -- --id=@d2 create DHCP_Options cidr=30.0.0.0/24 \
+options="\"server_id\"=\"30.0.0.1\" \"server_mac\"=\"ff:10:00:00:00:02\" \
+\"lease_time\"=\"3600\"" -- add Logical_Switch_Port ls2-lp2 dhcpv4_options @d2
+
+net_add n1
+sim_add hv1
+
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=ls1-lp1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+
+ovs-vsctl -- add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=ls1-lp2 \
+    options:tx_pcap=hv1/vif2-tx.pcap \
+    options:rxq_pcap=hv1/vif2-rx.pcap \
+    ofport-request=2
+
+ovs-vsctl -- add-port br-int hv1-vif3 -- \
+    set interface hv1-vif3 external-ids:iface-id=ls2-lp1 \
+    options:tx_pcap=hv1/vif3-tx.pcap \
+    options:rxq_pcap=hv1/vif3-rx.pcap \
+    ofport-request=3
+
+ovs-vsctl -- add-port br-int hv1-vif4 -- \
+    set interface hv1-vif4 external-ids:iface-id=ls2-lp2 \
+    options:tx_pcap=hv1/vif4-tx.pcap \
+    options:rxq_pcap=hv1/vif4-rx.pcap \
+    ofport-request=4
+
+ovn_populate_arp
+
+sleep 2
+
+as hv1 ovs-vsctl show
+
+# This shell function sends a DHCP request packet
+# test_dhcp INPORT SRC_MAC DHCP_TYPE OFFER_IP ...
+test_dhcp() {
+    local inport=$1 src_mac=$2 dhcp_type=$3 offer_ip=$4
+    local request=ffffffffffff${src_mac}080045100110000000008011000000000000ffffffff
+    # udp header and dhcp header
+    request+=0044004300fc0000
+    request+=010106006359aa760000000000000000000000000000000000000000${src_mac}
+    # client hardware padding
+    request+=00000000000000000000
+    # server hostname
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    # boot file name
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    # dhcp magic cookie
+    request+=63825363
+    # dhcp message type
+    request+=3501${dhcp_type}ff
+
+    if test $offer_ip != 0; then
+        local srv_mac=$5 srv_ip=$6 expected_dhcp_opts=$7
+        # total IP length will be the IP length of the request packet
+        # (which is 272 in our case) + 8 (padding bytes) + (expected_dhcp_opts / 2)
+        ip_len=`expr 280 + ${#expected_dhcp_opts} / 2`
+        udp_len=`expr $ip_len - 20`
+        printf -v ip_len "%x" $ip_len
+        printf -v udp_len "%x" $udp_len
+        # $ip_len var will be in 3 digits i.e 134. So adding a '0' before $ip_len
+        local reply=${src_mac}${srv_mac}080045100${ip_len}000000008011XXXX${srv_ip}${offer_ip}
+        # udp header and dhcp header.
+        # $udp_len var will be in 3 digits. So adding a '0' before $udp_len
+        reply+=004300440${udp_len}0000020106006359aa760000000000000000
+        # your ip address
+        reply+=${offer_ip}
+        # next server ip address, relay agent ip address, client mac address
+        reply+=0000000000000000${src_mac}
+        # client hardware padding
+        reply+=00000000000000000000
+        # server hostname
+        reply+=0000000000000000000000000000000000000000000000000000000000000000
+        reply+=0000000000000000000000000000000000000000000000000000000000000000
+        # boot file name
+        reply+=0000000000000000000000000000000000000000000000000000000000000000
+        reply+=0000000000000000000000000000000000000000000000000000000000000000
+        reply+=0000000000000000000000000000000000000000000000000000000000000000
+        reply+=0000000000000000000000000000000000000000000000000000000000000000
+        # dhcp magic cookie
+        reply+=63825363
+        # dhcp message type
+        local dhcp_reply_type=02
+        if test $dhcp_type = 03; then
+            dhcp_reply_type=05
+        fi
+        reply+=3501${dhcp_reply_type}${expected_dhcp_opts}00000000ff00000000
+        echo $reply >> $inport.expected
+    else
+        shift; shift; shift; shift;
+        for outport; do
+            echo $request | trim_zeros >> $outport.expected
+        done
+    fi
+    as hv1 ovs-appctl netdev-dummy/receive hv1-vif$inport $request
+}
+
+reset_pcap_file() {
+    local iface=$1
+    local pcap_file=$2
+    ovs-vsctl -- set Interface $iface options:tx_pcap=dummy-tx.pcap \
+options:rxq_pcap=dummy-rx.pcap
+    rm -f ${pcap_file}*.pcap
+    ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
+options:rxq_pcap=${pcap_file}-rx.pcap
+}
+
+ip_to_hex() {
+    printf "%02x%02x%02x%02x" "$@"
+}
+
+AT_CAPTURE_FILE([ofctl_monitor0.log])
+as hv1 ovs-ofctl monitor br-int resume --detach --no-chdir \
+--pidfile=ovs-ofctl0.pid 2> ofctl_monitor0.log
+
+echo "---------NB dump-----"
+ovn-nbctl show
+echo "---------------------"
+echo "---------SB dump-----"
+ovn-sbctl list datapath_binding
+echo "---------------------"
+ovn-sbctl list logical_flow
+echo "---------------------"
+
+echo "---------------------"
+ovn-sbctl dump-flows
+echo "---------------------"
+
+echo "------ hv1 dump ----------"
+as hv1 ovs-ofctl dump-flows br-int
+
+# Send DHCPDISCOVER.
+offer_ip=`ip_to_hex 10 0 0 4`
+server_ip=`ip_to_hex 10 0 0 1`
+expected_dhcp_opts=0104ffffff0003040a00000136040a000001330400000e10
+test_dhcp 1 f00000000001 01 $offer_ip ff1000000001 $server_ip $expected_dhcp_opts
+
+# NXT_RESUMEs should be 1.
+OVS_WAIT_UNTIL([test 1 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap > 1.packets
+cat 1.expected | cut -c -48 > expout
+AT_CHECK([cat 1.packets | cut -c -48], [0], [expout])
+# Skipping the IPv4 checksum.
+cat 1.expected | cut -c 53- > expout
+AT_CHECK([cat 1.packets | cut -c 53-], [0], [expout])
+
+# ovs-ofctl also resumes the packets and this causes other ports to receive
+# the DHCP request packet. So reset the pcap files so that its easier to test.
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif2 hv1/vif2
+rm -f 1.expected
+rm -f 2.expected
+
+# Send DHCPREQUEST.
+offer_ip=`ip_to_hex 10 0 0 6`
+server_ip=`ip_to_hex 10 0 0 1`
+expected_dhcp_opts=0104ffffff0003040a00000136040a000001330400000e10
+test_dhcp 2 f00000000002 03 $offer_ip ff1000000001 $server_ip $expected_dhcp_opts
+
+# NXT_RESUMEs should be 2.
+OVS_WAIT_UNTIL([test 2 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap > 2.packets
+cat 2.expected | cut -c -48 > expout
+AT_CHECK([cat 2.packets | cut -c -48], [0], [expout])
+# Skipping the IPv4 checksum.
+cat 2.expected | cut -c 53- > expout
+AT_CHECK([cat 2.packets | cut -c 53-], [0], [expout])
+
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif2 hv1/vif2
+rm -f 1.expected
+rm -f 2.expected
+
+# Send Invalid DHCPv4 packet on ls1-lp2. It should be received by ovn-controller
+# but should be resumed without the reply.
+# ls1-lp1 (vif1-tx.pcap) should receive the DHCPv4 request packet twice,
+# one from ovn-controller and the other from "ovs-ofctl resume."
+offer_ip=0
+test_dhcp 2 f00000000002 08 $offer_ip 1 1
+
+# NXT_RESUMEs should be 3.
+OVS_WAIT_UNTIL([test 3 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+# vif1-tx.pcap should have received the DHCPv4 (invalid) request packet
+OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [1.expected])
+
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif2 hv1/vif2
+rm -f 1.expected
+rm -f 2.expected
+
+# Send DHCPv4 packet on ls2-lp1. It doesn't have any DHCPv4 options defined.
+# ls2-lp2 (vif4-tx.pcap) should receive the DHCPv4 request packet once.
+
+test_dhcp 3 f00000000003 01 0 4
+
+# Send DHCPv4 packet on ls2-lp2. "router" DHCPv4 option is not defined for
+# this lport.
+test_dhcp 4 f00000000004 01 0 3
+
+# NXT_RESUMEs should be 3.
+OVS_WAIT_UNTIL([test 3 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+OVN_CHECK_PACKETS([hv1/vif3-tx.pcap], [3.expected])
+OVN_CHECK_PACKETS([hv1/vif4-tx.pcap], [4.expected])
+
+as hv1
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as main
+OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 AT_CLEANUP
 
@@ -3151,19 +3364,12 @@ ovn-nbctl lsp-add foo foo1 \
 -- lsp-set-addresses foo1 "f0:00:00:01:02:03 192.168.1.2"
 
 # Create logical port alice1 in alice
-ovn-nbctl lsp-add alice alice1 \
+# and wait for ovn-northd and ovn-controller to catch up.
+ovn-nbctl --timeout=5 --wait=hv lsp-add alice alice1 \
 -- lsp-set-addresses alice1 "f0:00:00:01:02:04 172.16.1.2"
-
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 2
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 
 # Send ip packets between foo1 and alice1
@@ -3192,14 +3398,6 @@ ovn-sbctl list chassis
 ovn-sbctl list encap
 echo "---------------------"
 
-echo "------ hv1 dump ----------"
-as hv1 ovs-ofctl show br-int
-as hv1 ovs-ofctl dump-flows br-int
-echo "------ hv2 dump ----------"
-as hv2 ovs-ofctl show br-int
-as hv2 ovs-ofctl dump-flows br-int
-echo "----------------------------"
-
 # Packet to Expect at alice1
 src_mac="000002010203"
 dst_mac="f00000010204"
@@ -3211,9 +3409,16 @@ expected=${dst_mac}${src_mac}08004500001c000000003e110200${src_ip}${dst_ip}00351
 as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 $packet
 as hv1 ovs-appctl ofproto/trace br-int in_port=1 $packet
 
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/vif1-tx.pcap | trim_zeros > received1.packets
-echo $expected | trim_zeros > expout
-AT_CHECK([cat received1.packets], [0], [expout])
+echo "------ hv1 dump after packet 1 ----------"
+as hv1 ovs-ofctl show br-int
+as hv1 ovs-ofctl dump-flows br-int
+echo "------ hv2 dump after packet 1 ----------"
+as hv2 ovs-ofctl show br-int
+as hv2 ovs-ofctl dump-flows br-int
+echo "----------------------------"
+
+echo $expected > expected
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
 # Delete the router and re-create it. Things should work as before.
 ovn-nbctl  lr-del R2
@@ -3223,18 +3428,23 @@ ovn-nbctl lrp-add R2 alice 00:00:02:01:02:03 172.16.1.1/24
 # Connect R2 to join
 ovn-nbctl lrp-add R2 R2_join 00:00:04:01:02:04 20.0.0.2/24
 
-ovn-nbctl -- --id=@lrt create Logical_Router_Static_Route \
+ovn-nbctl --timeout=5 --wait=hv -- --id=@lrt create Logical_Router_Static_Route \
 ip_prefix=192.168.1.0/24 nexthop=20.0.0.1 -- add Logical_Router \
 R2 static_routes @lrt
 
-# Wait for ovn-controller to catch up.
-sleep 1
-
 # Send the packet again.
 as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 $packet
-$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv2/vif1-tx.pcap | trim_zeros > received1.packets
-echo $expected | trim_zeros >> expout
-AT_CHECK([cat received1.packets], [0], [expout])
+
+echo "------ hv1 dump after packet 2 ----------"
+as hv1 ovs-ofctl show br-int
+as hv1 ovs-ofctl dump-flows br-int
+echo "------ hv2 dump after packet 2 ----------"
+as hv2 ovs-ofctl show br-int
+as hv2 ovs-ofctl dump-flows br-int
+echo "----------------------------"
+
+echo $expected >> expected
+OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1],[hv2])
 
@@ -3291,17 +3501,11 @@ ovs-vsctl -- add-port br-int vif2 -- \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=1
 
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
-
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 for i in 1 2; do
     : > vif$i.expected
@@ -3382,11 +3586,7 @@ as hv1 ovs-ofctl dump-flows br-int
 
 # Now check the packets actually received against the ones expected.
 for inport in 1 2; do
-    file=hv1/vif${inport}-tx.pcap
-    echo $file
-    $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > received.packets
-    cat vif$inport.expected | trim_zeros > expout
-    AT_CHECK([cat received.packets], [0], [expout])
+    OVN_CHECK_PACKETS([hv1/vif${inport}-tx.pcap], [vif$inport.expected])
 done
 
 OVN_CLEANUP([hv1])
@@ -3457,17 +3657,13 @@ ovn-nbctl acl-add lsw0 from-lport 1002 'ip6 && icmp6'  allow-related
 ovn-nbctl acl-add lsw0 to-lport 1002 'outport == "lp1" && ip6 && icmp6'  allow-related
 ovn-nbctl acl-add lsw0 to-lport 1002 'outport == "lp2" && ip6 && icmp6'  allow-related
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Given the name of a logical port, prints the name of the hypervisor
 # on which it is located.
 vif_to_hv() {
     echo hv1${1%?}
-}
-trim_zeros() {
-    sed 's/\(00\)\{1,\}$//'
 }
 for i in 1 2; do
     : > $i.expected
@@ -3482,19 +3678,13 @@ na_packet=fa163e940598fa163ea1f9ae86dd6000000000203afffd81ce49a9480000f8163efffe
 as hv1 ovs-appctl netdev-dummy/receive vif1 $ns_packet
 echo $na_packet | trim_zeros >> 1.expected
 
-sleep 1
-
 echo "------ hv1 dump ------"
 as hv1 ovs-vsctl show
 as hv1 ovs-ofctl -O OpenFlow13 show br-int
 as hv1 ovs-ofctl -O OpenFlow13 dump-flows br-int
 
 for i in 1 2; do
-    file=hv1/vif$i-tx.pcap
-    echo $file
-    $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $file | trim_zeros > $i.packets
-    cat $i.expected > expout
-    AT_CHECK([cat $i.packets], [0], [expout])
+    OVN_CHECK_PACKETS([hv1/vif$i-tx.pcap], [$i.expected])
 done
 
 OVN_CLEANUP([hv1])
@@ -3514,9 +3704,7 @@ ovn_attach n1 br-phys 192.168.0.1
 
 row=`ovn-nbctl create Address_Set name=set1 addresses=\"1.1.1.1\"`
 ovn-nbctl set Address_Set $row name=set1 addresses=\"1.1.1.1,1.1.1.2\"
-ovn-nbctl destroy Address_Set $row
-
-sleep 1
+ovn-nbctl --timeout=5 --wait=hv destroy Address_Set $row
 
 # A bug previously existed in the address set support code
 # that caused ovn-controller to crash after an address set

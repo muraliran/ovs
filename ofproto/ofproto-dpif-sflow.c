@@ -26,7 +26,7 @@
 #include "compiler.h"
 #include "dpif.h"
 #include "hash.h"
-#include "hmap.h"
+#include "openvswitch/hmap.h"
 #include "netdev.h"
 #include "netlink.h"
 #include "openvswitch/ofpbuf.h"
@@ -90,12 +90,6 @@ static void dpif_sflow_del_port__(struct dpif_sflow *,
 #define RECEIVER_INDEX 1
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-
-static bool
-nullable_string_is_equal(const char *a, const char *b)
-{
-    return a ? b && !strcmp(a, b) : !b;
-}
 
 static bool
 ofproto_sflow_options_equal(const struct ofproto_sflow_options *a,
