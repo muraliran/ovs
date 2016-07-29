@@ -2345,6 +2345,7 @@ update_conditions(struct ovsdb_idl *idl, char *commands)
                 parse_link2_json_clause(idl, add_cmd, json->u.array.elems[i]);
             }
         }
+        json_destroy(json);
     }
 }
 
