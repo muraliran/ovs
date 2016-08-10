@@ -140,6 +140,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/netlink.h \
 	lib/nx-match.c \
 	lib/nx-match.h \
+	lib/object-collection.c \
+	lib/object-collection.h \
 	lib/odp-execute.c \
 	lib/odp-execute.h \
 	lib/odp-util.c \
@@ -279,6 +281,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/vconn-provider.h \
 	lib/vconn-stream.c \
 	lib/vconn.c \
+	lib/versions.h \
 	lib/vlan-bitmap.c \
 	lib/vlan-bitmap.h \
 	lib/vlog.c \
@@ -299,6 +302,7 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/latch-windows.c \
 	lib/route-table-stub.c \
 	lib/if-notifier-stub.c \
+	lib/stream-windows.c \
 	lib/strsep.c
 else
 lib_libopenvswitch_la_SOURCES += \
@@ -429,8 +433,11 @@ EXTRA_DIST += \
 	lib/dh1024.pem \
 	lib/dh2048.pem \
 	lib/dh4096.pem \
+	lib/common.xml \
 	lib/dirs.c.in \
-	lib/db-ctl-base.xml
+	lib/db-ctl-base.xml \
+	lib/ssl.xml \
+	lib/vlog.xml
 
 MAN_FRAGMENTS += \
 	lib/colors.man \

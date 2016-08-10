@@ -375,13 +375,13 @@
       depends on the current value of the <code>outport</code> field.  Suppose
       <code>outport</code> designates a logical port.  First, OVN compares
       <code>inport</code> to <code>outport</code>; if they are equal, it treats
-      the <code>output</code> as a no-op.  In the common case, where they are
-      different, the packet enters the egress pipeline.  This transition to the
-      egress pipeline discards register data, e.g. <code>reg0</code> ...
-      <code>reg9</code> and connection tracking state, to achieve
-      uniform behavior regardless of whether the egress pipeline is on a
-      different hypervisor (because registers aren't preserve across
-      tunnel encapsulation).
+      the <code>output</code> as a no-op by default.  In the common
+      case, where they are different, the packet enters the egress
+      pipeline.  This transition to the egress pipeline discards
+      register data, e.g. <code>reg0</code> ...  <code>reg9</code> and
+      connection tracking state, to achieve uniform behavior regardless
+      of whether the egress pipeline is on a different hypervisor
+      (because registers aren't preserve across tunnel encapsulation).
     </p>
 
     <p>
@@ -415,45 +415,9 @@
     <p><em>Pipeline Stages</em></p>
 
     <p>
-      <code>ovn-northd</code> is responsible for populating the
-      <ref table="Logical_Flow"/> table, so the stages are an
-      implementation detail and subject to change.  This section
-      describes the current logical flow table.
+      <code>ovn-northd</code> populates the <ref table="Logical_Flow"/> table
+      with the logical flows described in detail in <code>ovn-northd</code>(8).
     </p>
-
-    <p>
-      The ingress pipeline consists of the following stages:
-    </p>
-    <ul>
-      <li>
-        Port Security (Table 0): Validates the source address, drops
-        packets with a VLAN tag, and, if configured, verifies that the
-        logical port is allowed to send with the source address.
-      </li>
-
-      <li>
-        L2 Destination Lookup (Table 1): Forwards known unicast
-        addresses to the appropriate logical port.  Unicast packets to
-        unknown hosts are forwarded to logical ports configured with the
-        special <code>unknown</code> mac address.  Broadcast, and
-        multicast are flooded to all ports in the logical switch.
-      </li>
-    </ul>
-
-    <p>
-      The egress pipeline consists of the following stages:
-    </p>
-    <ul>
-      <li>
-        ACL (Table 0): Applies any specified access control lists.
-      </li>
-
-      <li>
-        Port Security (Table 1): If configured, verifies that the
-        logical port is allowed to receive packets with the destination
-        address.
-      </li>
-    </ul>
 
     <column name="logical_datapath">
       The logical datapath to which the logical flow belongs.
@@ -787,6 +751,7 @@
         <li><code>reg0</code>...<code>reg9</code></li>
         <li><code>xxreg0</code> <code>xxreg1</code></li>
         <li><code>inport</code> <code>outport</code></li>
+        <li><code>flags.loopback</code></li>
         <li><code>eth.src</code> <code>eth.dst</code> <code>eth.type</code></li>
         <li><code>vlan.tci</code> <code>vlan.vid</code> <code>vlan.pcp</code> <code>vlan.present</code></li>
         <li><code>ip.proto</code> <code>ip.dscp</code> <code>ip.ecn</code> <code>ip.ttl</code> <code>ip.frag</code></li>
@@ -837,7 +802,9 @@
         <li><code>ip.later_frag</code> expands to <code>ip.frag[1]</code></li>
         <li><code>ip.first_frag</code> expands to <code>ip.is_frag &amp;&amp; !ip.later_frag</code></li>
         <li><code>arp</code> expands to <code>eth.type == 0x806</code></li>
-        <li><code>nd</code> expands to <code>icmp6.type == {135, 136} &amp;&amp; icmp6.code == 0</code></li>
+        <li><code>nd</code> expands to <code>icmp6.type == {135, 136} &amp;&amp; icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
+        <li><code>nd_ns</code> expands to <code>icmp6.type == 135 &amp;&amp; icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
+        <li><code>nd_na</code> expands to <code>icmp6.type == 136 &amp;&amp; icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
         <li><code>tcp</code> expands to <code>ip.proto == 6</code></li>
         <li><code>udp</code> expands to <code>ip.proto == 17</code></li>
         <li><code>sctp</code> expands to <code>ip.proto == 132</code></li>
@@ -881,13 +848,13 @@
           </p>
 
           <p>
-            Output to the input port is implicitly dropped, that is,
-            <code>output</code> becomes a no-op if <code>outport</code> ==
-            <code>inport</code>.  Occasionally it may be useful to override
-            this behavior, e.g. to send an ARP reply to an ARP request; to do
-            so, use <code>inport = "";</code> to set the logical input port to
-            an empty string (which should not be used as the name of any
-            logical port).
+            By default, output to the input port is implicitly dropped,
+            that is, <code>output</code> becomes a no-op if
+            <code>outport</code> == <code>inport</code>.  Occasionally
+            it may be useful to override this behavior, e.g. to send an
+            ARP reply to an ARP request; to do so, use
+            <code>flags.loopback = 1</code> to allow the packet to
+            "hair-pin" back to the input port.
           </p>
         </dd>
 
@@ -1106,17 +1073,55 @@
           <p><b>Prerequisite:</b> <code>ip4</code></p>
         </dd>
 
+        <dt><code>get_arp(<var>P</var>, <var>A</var>);</code></dt>
+
+        <dd>
+          <p>
+            <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
+            IP address field <var>A</var>.
+          </p>
+
+          <p>
+            Looks up <var>A</var> in <var>P</var>'s mac binding table.
+            If an entry is found, stores its Ethernet address in
+            <code>eth.dst</code>, otherwise stores
+            <code>00:00:00:00:00:00</code> in <code>eth.dst</code>.
+          </p>
+
+          <p><b>Example:</b> <code>get_arp(outport, ip4.dst);</code></p>
+        </dd>
+
         <dt>
-          <code>na { <var>action</var>; </code>...<code> };</code>
+          <code>put_arp(<var>P</var>, <var>A</var>, <var>E</var>);</code>
         </dt>
 
         <dd>
           <p>
-            Temporarily replaces the IPv6 packet being processed by an IPv6
-            neighbor advertisement (NA) packet and executes each nested
-            <var>action</var> on the NA packet.  Actions following the
-            <var>na</var> action, if any, apply to the original, unmodified
-            packet.
+            <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
+            IP address field <var>A</var>, 48-bit Ethernet address field
+            <var>E</var>.
+          </p>
+
+          <p>
+            Adds or updates the entry for IP address <var>A</var> in
+            logical port <var>P</var>'s mac binding table, setting its
+            Ethernet address to <var>E</var>.
+          </p>
+
+          <p><b>Example:</b> <code>put_arp(inport, arp.spa, arp.sha);</code></p>
+        </dd>
+
+        <dt>
+          <code>nd_na { <var>action</var>; </code>...<code> };</code>
+        </dt>
+
+        <dd>
+          <p>
+            Temporarily replaces the IPv6 neighbor solicitation packet
+            being processed by an IPv6 neighbor advertisement (NA)
+            packet and executes each nested <var>action</var> on the NA
+            packet.  Actions following the <code>nd_na</code> action,
+            if any, apply to the original, unmodified packet.
           </p>
 
           <p>
@@ -1142,46 +1147,46 @@
           </p>
 
           <p>
-            <b>Prerequisite:</b> <code>nd</code>
+            <b>Prerequisite:</b> <code>nd_ns</code>
           </p>
         </dd>
 
-        <dt><code>get_arp(<var>P</var>, <var>A</var>);</code></dt>
+        <dt><code>get_nd(<var>P</var>, <var>A</var>);</code></dt>
 
         <dd>
           <p>
-            <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
-            IP address field <var>A</var>.
+            <b>Parameters</b>: logical port string field <var>P</var>, 128-bit
+            IPv6 address field <var>A</var>.
           </p>
 
           <p>
-            Looks up <var>A</var> in <var>P</var>'s ARP table.  If an entry is
-            found, stores its Ethernet address in <code>eth.dst</code>,
-            otherwise stores <code>00:00:00:00:00:00</code> in
-            <code>eth.dst</code>.
+            Looks up <var>A</var> in <var>P</var>'s mac binding table.
+            If an entry is found, stores its Ethernet address in
+            <code>eth.dst</code>, otherwise stores
+            <code>00:00:00:00:00:00</code> in <code>eth.dst</code>.
           </p>
 
-          <p><b>Example:</b> <code>get_arp(outport, ip4.dst);</code></p>
+          <p><b>Example:</b> <code>get_nd(outport, ip6.dst);</code></p>
         </dd>
 
         <dt>
-          <code>put_arp(<var>P</var>, <var>A</var>, <var>E</var>);</code>
+          <code>put_nd(<var>P</var>, <var>A</var>, <var>E</var>);</code>
         </dt>
 
         <dd>
           <p>
-            <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
-            IP address field <var>A</var>, 48-bit Ethernet address field
-            <var>E</var>.
+            <b>Parameters</b>: logical port string field <var>P</var>,
+            128-bit IPv6 address field <var>A</var>, 48-bit Ethernet
+            address field <var>E</var>.
           </p>
 
           <p>
-            Adds or updates the entry for IP address <var>A</var> in logical
-            port <var>P</var>'s ARP table, setting its Ethernet address to
-            <var>E</var>.
+            Adds or updates the entry for IPv6 address <var>A</var> in
+            logical port <var>P</var>'s mac binding table, setting its
+            Ethernet address to <var>E</var>.
           </p>
 
-          <p><b>Example:</b> <code>put_arp(inport, arp.spa, arp.sha);</code></p>
+          <p><b>Example:</b> <code>put_nd(inport, nd.target, nd.tll);</code></p>
         </dd>
 
         <dt>

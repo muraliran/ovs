@@ -1,4 +1,4 @@
-/* Copyright (c) 2015 Nicira, Inc.
+/* Copyright (c) 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,23 @@
 
 #include "openvswitch/meta-flow.h"
 
+struct shash;
+
+enum {
+    MLF_ALLOW_LOOPBACK_BIT = 0
+};
+
+enum {
+    MLF_ALLOW_LOOPBACK = (1 << MLF_ALLOW_LOOPBACK_BIT) /* Allow outputting
+                                                          back to inport. */
+};
+
 /* Logical fields.
  *
  * These values are documented in ovn-architecture(7), please update the
  * documentation if you change any of them. */
 #define MFF_LOG_DATAPATH MFF_METADATA /* Logical datapath (64 bits). */
+#define MFF_LOG_FLAGS      MFF_REG10  /* One of MLF_* (32 bits). */
 #define MFF_LOG_DNAT_ZONE  MFF_REG11  /* conntrack dnat zone for gateway router
                                        * (32 bits). */
 #define MFF_LOG_SNAT_ZONE  MFF_REG12  /* conntrack snat zone for gateway router
@@ -35,16 +47,9 @@
 /* Logical registers.
  *
  * Make sure these don't overlap with the logical fields! */
-#define MFF_LOG_REGS \
-    MFF_LOG_REG(MFF_REG0) \
-    MFF_LOG_REG(MFF_REG1) \
-    MFF_LOG_REG(MFF_REG2) \
-    MFF_LOG_REG(MFF_REG3) \
-    MFF_LOG_REG(MFF_REG4) \
-    MFF_LOG_REG(MFF_REG5) \
-    MFF_LOG_REG(MFF_REG6) \
-    MFF_LOG_REG(MFF_REG7) \
-    MFF_LOG_REG(MFF_REG8) \
-    MFF_LOG_REG(MFF_REG9)
+#define MFF_LOG_REG0 MFF_REG0
+#define MFF_N_LOG_REGS 10
+
+void ovn_init_symtab(struct shash *symtab);
 
 #endif /* ovn/lib/logical-fields.h */

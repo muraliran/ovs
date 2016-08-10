@@ -249,8 +249,8 @@ put_controller_op(struct ofpbuf *ofpacts, enum action_opcode opcode)
     finish_controller_op(ofpacts, ofs);
 }
 
-/* Implements the "arp" and "na" actions, which execute nested actions on a
- * packet derived from the one being processed. */
+/* Implements the "arp" and "nd_na" actions, which execute nested
+ * actions on a packet derived fro: the one being processed. */
 static void
 parse_nested_action(struct action_context *ctx, enum action_opcode opcode,
                     const char *prereq)
@@ -278,10 +278,11 @@ parse_nested_action(struct action_context *ctx, enum action_opcode opcode,
 
     ctx->ofpacts = outer_ofpacts;
 
-    /* Add a "controller" action with the actions nested inside "{...}",
-     * converted to OpenFlow, as its userdata.  ovn-controller will convert the
-     * packet to ARP or NA and then send the packet and actions back to the
-     * switch inside an OFPT_PACKET_OUT message. */
+    /* Add a "controller" OpenFlow action with the actions nested inside the
+     * requested OVN action's "{...}", converted to OpenFlow, as its userdata.
+     * ovn-controller will convert the packet to the requested type and
+     * then send the packet and actions back to the switch inside an
+     * OFPT_PACKET_OUT message. */
     size_t oc_offset = start_controller_op(ctx->ofpacts, opcode, false);
     ofpacts_put_openflow_actions(inner_ofpacts.data, inner_ofpacts.size,
                                  ctx->ofpacts, OFP13_VERSION);
@@ -423,7 +424,7 @@ parse_get_arp_action(struct action_context *ctx)
     setup_args(ctx, args, ARRAY_SIZE(args));
 
     put_load(0, MFF_ETH_DST, 0, 48, ctx->ofpacts);
-    emit_resubmit(ctx, ctx->ap->arp_ptable);
+    emit_resubmit(ctx, ctx->ap->mac_bind_ptable);
 
     restore_args(ctx, args, ARRAY_SIZE(args));
 }
@@ -761,6 +762,7 @@ parse_ct_lb_action(struct action_context *ctx)
         group_info = xmalloc(sizeof *group_info);
         group_info->group = ds;
         group_info->group_id = group_id;
+        group_info->lflow_uuid = ctx->ap->lflow_uuid;
         group_info->hmap_node.hash = hash;
 
         hmap_insert(&ctx->ap->group_table->desired_groups,
@@ -772,6 +774,56 @@ parse_ct_lb_action(struct action_context *ctx)
     /* Create an action to set the group. */
     og = ofpact_put_GROUP(ctx->ofpacts);
     og->group_id = group_id;
+}
+
+static void
+parse_get_nd_action(struct action_context *ctx)
+{
+    struct mf_subfield port, ip6;
+
+    if (!action_force_match(ctx, LEX_T_LPAREN)
+        || !action_parse_field(ctx, 0, &port)
+        || !action_force_match(ctx, LEX_T_COMMA)
+        || !action_parse_field(ctx, 128, &ip6)
+        || !action_force_match(ctx, LEX_T_RPAREN)) {
+        return;
+    }
+
+    const struct arg args[] = {
+        { &port, MFF_LOG_OUTPORT },
+        { &ip6, MFF_XXREG0 },
+    };
+    setup_args(ctx, args, ARRAY_SIZE(args));
+
+    put_load(0, MFF_ETH_DST, 0, 48, ctx->ofpacts);
+    emit_resubmit(ctx, ctx->ap->mac_bind_ptable);
+
+    restore_args(ctx, args, ARRAY_SIZE(args));
+}
+
+static void
+parse_put_nd_action(struct action_context *ctx)
+{
+    struct mf_subfield port, ip6, mac;
+
+    if (!action_force_match(ctx, LEX_T_LPAREN)
+        || !action_parse_field(ctx, 0, &port)
+        || !action_force_match(ctx, LEX_T_COMMA)
+        || !action_parse_field(ctx, 128, &ip6)
+        || !action_force_match(ctx, LEX_T_COMMA)
+        || !action_parse_field(ctx, 48, &mac)
+        || !action_force_match(ctx, LEX_T_RPAREN)) {
+        return;
+    }
+
+    const struct arg args[] = {
+        { &port, MFF_LOG_INPORT },
+        { &ip6, MFF_XXREG0 },
+        { &mac, MFF_ETH_SRC }
+    };
+    setup_args(ctx, args, ARRAY_SIZE(args));
+    put_controller_op(ctx->ofpacts, ACTION_OPCODE_PUT_ND);
+    restore_args(ctx, args, ARRAY_SIZE(args));
 }
 
 static void
@@ -1064,12 +1116,16 @@ parse_action(struct action_context *ctx)
         parse_ct_lb_action(ctx);
     } else if (lexer_match_id(ctx->lexer, "arp")) {
         parse_nested_action(ctx, ACTION_OPCODE_ARP, "ip4");
-    } else if (lexer_match_id(ctx->lexer, "na")) {
-        parse_nested_action(ctx, ACTION_OPCODE_NA, "nd");
     } else if (lexer_match_id(ctx->lexer, "get_arp")) {
         parse_get_arp_action(ctx);
     } else if (lexer_match_id(ctx->lexer, "put_arp")) {
         parse_put_arp_action(ctx);
+    } else if (lexer_match_id(ctx->lexer, "nd_na")) {
+        parse_nested_action(ctx, ACTION_OPCODE_ND_NA, "nd_ns");
+    } else if (lexer_match_id(ctx->lexer, "get_nd")) {
+        parse_get_nd_action(ctx);
+    } else if (lexer_match_id(ctx->lexer, "put_nd")) {
+        parse_put_nd_action(ctx);
     } else {
         action_syntax_error(ctx, "expecting action");
     }

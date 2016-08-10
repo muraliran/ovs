@@ -22,6 +22,7 @@
 #include "compiler.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/dynamic-string.h"
+#include "openvswitch/uuid.h"
 #include "util.h"
 
 struct expr;
@@ -43,6 +44,7 @@ struct group_table {
 struct group_info {
     struct hmap_node hmap_node;
     struct ds group;
+    struct uuid lflow_uuid;
     uint32_t group_id;
 };
 
@@ -73,11 +75,21 @@ enum action_opcode {
      */
     ACTION_OPCODE_PUT_DHCP_OPTS,
 
-    /* "na { ...actions... }".
+    /* "nd_na { ...actions... }".
      *
      * The actions, in OpenFlow 1.3 format, follow the action_header.
      */
-    ACTION_OPCODE_NA,
+    ACTION_OPCODE_ND_NA,
+
+    /* "put_nd(port, ip6, mac)"
+     *
+     * Arguments are passed through the packet metadata and data, as follows:
+     *
+     *     MFF_XXREG0 = ip6
+     *     MFF_LOG_INPORT = port
+     *     MFF_ETH_SRC = mac
+     */
+    ACTION_OPCODE_PUT_ND,
 };
 
 /* Header. */
@@ -107,6 +119,9 @@ struct action_params {
     /* A struct to figure out the group_id for group actions. */
     struct group_table *group_table;
 
+    /* The logical flow uuid that drove this action. */
+    struct uuid lflow_uuid;
+
     /* OVN maps each logical flow table (ltable), one-to-one, onto a physical
      * OpenFlow flow table (ptable).  A number of parameters describe this
      * mapping and data related to flow tables:
@@ -128,7 +143,8 @@ struct action_params {
     uint8_t first_ptable;       /* First OpenFlow table. */
     uint8_t cur_ltable;         /* 0 <= cur_ltable < n_tables. */
     uint8_t output_ptable;      /* OpenFlow table for 'output' to resubmit. */
-    uint8_t arp_ptable;         /* OpenFlow table for 'get_arp' to resubmit. */
+    uint8_t mac_bind_ptable;    /* OpenFlow table for 'get_arp'/'get_nd' to
+                                   resubmit. */
 };
 
 char *actions_parse(struct lexer *, const struct action_params *,

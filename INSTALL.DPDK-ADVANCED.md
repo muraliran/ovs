@@ -11,7 +11,8 @@ OVS DPDK ADVANCED INSTALL GUIDE
 6. [Vhost Walkthrough](#vhost)
 7. [QOS](#qos)
 8. [Rate Limiting](#rl)
-9. [Vsperf](#vsperf)
+9. [Flow Control](#fc)
+10. [Vsperf](#vsperf)
 
 ## <a name="overview"></a> 1. Overview
 
@@ -43,7 +44,7 @@ for DPDK and OVS.
     For IVSHMEM case, set `export DPDK_TARGET=x86_64-ivshmem-linuxapp-gcc`
 
     ```
-    export DPDK_DIR=/usr/src/dpdk-16.04
+    export DPDK_DIR=/usr/src/dpdk-16.07
     export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
     make install T=$DPDK_TARGET DESTDIR=install
     ```
@@ -180,7 +181,7 @@ right PCIe slot.
   CONFIG_RTE_LIBRTE_VHOST_NUMA=y, vHost User ports automatically
   detect the NUMA socket of the QEMU vCPUs and will be serviced by a PMD
   from the same node provided a core on this node is enabled in the
-  pmd-cpu-mask.
+  pmd-cpu-mask. libnuma packages are required for this feature.
 
 ### 3.7 Compiler Optimizations
 
@@ -339,7 +340,7 @@ For users wanting to do packet forwarding using kernel stack below are the steps
        cd /usr/src/cmdline_generator
        wget https://raw.githubusercontent.com/netgroup-polito/un-orchestrator/master/orchestrator/compute_controller/plugins/kvm-libvirt/cmdline_generator/cmdline_generator.c
        wget https://raw.githubusercontent.com/netgroup-polito/un-orchestrator/master/orchestrator/compute_controller/plugins/kvm-libvirt/cmdline_generator/Makefile
-       export RTE_SDK=/usr/src/dpdk-16.04
+       export RTE_SDK=/usr/src/dpdk-16.07
        export RTE_TARGET=x86_64-ivshmem-linuxapp-gcc
        make
        ./build/cmdline_generator -m -p dpdkr0 XXX
@@ -363,7 +364,7 @@ For users wanting to do packet forwarding using kernel stack below are the steps
        mount -t hugetlbfs nodev /dev/hugepages (if not already mounted)
 
        # Build the DPDK ring application in the VM
-       export RTE_SDK=/root/dpdk-16.04
+       export RTE_SDK=/root/dpdk-16.07
        export RTE_TARGET=x86_64-ivshmem-linuxapp-gcc
        make
 
@@ -372,9 +373,94 @@ For users wanting to do packet forwarding using kernel stack below are the steps
        where "-n 0" refers to ring '0' i.e dpdkr0
        ```
 
+### 5.3 PHY-VM-PHY [VHOST MULTIQUEUE]
+
+  The steps (1-5) in 3.3 section of [INSTALL DPDK] guide will create & initialize DB,
+  start vswitchd and add dpdk devices to bridge br0.
+
+  1. Configure PMD and RXQs. For example set no. of dpdk port rx queues to atleast 2.
+     The number of rx queues at vhost-user interface gets automatically configured after
+     virtio device connection and doesn't need manual configuration.
+
+     ```
+     ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=c
+     ovs-vsctl set Interface dpdk0 options:n_rxq=2
+     ovs-vsctl set Interface dpdk1 options:n_rxq=2
+     ```
+
+  2. Instantiate Guest VM using Qemu cmdline
+
+       Guest Configuration
+
+       ```
+       | configuration        | values | comments
+       |----------------------|--------|-----------------
+       | qemu version         | 2.5.0  |
+       | qemu thread affinity |2 cores | taskset 0x30
+       | memory               | 4GB    | -
+       | cores                | 2      | -
+       | Qcow2 image          |Fedora22| -
+       | multiqueue           |   on   | -
+       ```
+
+       Instantiate Guest
+
+       ```
+       export VM_NAME=vhost-vm
+       export GUEST_MEM=4096M
+       export QCOW2_IMAGE=/root/Fedora22_x86_64.qcow2
+       export VHOST_SOCK_DIR=/usr/local/var/run/openvswitch
+
+       taskset 0x30 qemu-system-x86_64 -cpu host -smp 2,cores=2 -drive file=$QCOW2_IMAGE -m 4096M --enable-kvm -name $VM_NAME -nographic -object memory-backend-file,id=mem,size=$GUEST_MEM,mem-path=/dev/hugepages,share=on -numa node,memdev=mem -mem-prealloc -chardev socket,id=char1,path=$VHOST_SOCK_DIR/dpdkvhostuser0 -netdev type=vhost-user,id=mynet1,chardev=char1,vhostforce,queues=2 -device virtio-net-pci,mac=00:00:00:00:00:01,netdev=mynet1,mq=on,vectors=6 -chardev socket,id=char2,path=$VHOST_SOCK_DIR/dpdkvhostuser1 -netdev type=vhost-user,id=mynet2,chardev=char2,vhostforce,queues=2 -device virtio-net-pci,mac=00:00:00:00:00:02,netdev=mynet2,mq=on,vectors=6
+       ```
+
+       Note: Queue value above should match the queues configured in OVS, The vector value
+       should be set to 'no. of queues x 2 + 2'.
+
+  3. Guest interface configuration
+
+     Assuming there are 2 interfaces in the guest named eth0, eth1 check the channel
+     configuration and set the number of combined channels to 2 for virtio devices.
+     More information can be found in [Vhost walkthrough] section.
+
+       ```
+       ethtool -l eth0
+       ethtool -L eth0 combined 2
+       ethtool -L eth1 combined 2
+       ```
+
+  4. Kernel Packet forwarding
+
+     Configure IP and enable interfaces
+
+     ```
+     ifconfig eth0 5.5.5.1/24 up
+     ifconfig eth1 90.90.90.1/24 up
+     ```
+
+     Configure IP forwarding and add route entries
+
+     ```
+     sysctl -w net.ipv4.ip_forward=1
+     sysctl -w net.ipv4.conf.all.rp_filter=0
+     sysctl -w net.ipv4.conf.eth0.rp_filter=0
+     sysctl -w net.ipv4.conf.eth1.rp_filter=0
+     ip route add 2.1.1.0/24 dev eth1
+     route add default gw 2.1.1.2 eth1
+     route add default gw 90.90.90.90 eth1
+     arp -s 90.90.90.90 DE:AD:BE:EF:CA:FE
+     arp -s 2.1.1.2 DE:AD:BE:EF:CA:FA
+     ```
+
+     Check traffic on multiple queues
+
+     ```
+     cat /proc/interrupts | grep virtio
+     ```
+
 ## <a name="vhost"></a> 6. Vhost Walkthrough
 
-DPDK 16.04 supports two types of vhost:
+DPDK 16.07 supports two types of vhost:
 
 1. vhost-user - enabled default
 
@@ -827,7 +913,41 @@ To clear the ingress policer configuration from the port use the following:
 
 For more details regarding ingress-policer see the vswitch.xml.
 
-## <a name="vsperf"></a> 9. Vsperf
+## <a name="fc"></a> 9. Flow control.
+Flow control can be enabled only on DPDK physical ports.
+To enable flow control support at tx side while adding a port, add the
+'tx-flow-ctrl' option to the 'ovs-vsctl add-port' as in the eg: below.
+
+```
+ovs-vsctl add-port br0 dpdk0 -- \
+set Interface dpdk0 type=dpdk options:tx-flow-ctrl=true
+```
+
+Similarly to enable rx flow control,
+
+```
+ovs-vsctl add-port br0 dpdk0 -- \
+set Interface dpdk0 type=dpdk options:rx-flow-ctrl=true
+```
+
+And to enable the flow control auto-negotiation,
+
+```
+ovs-vsctl add-port br0 dpdk0 -- \
+set Interface dpdk0 type=dpdk options:flow-ctrl-autoneg=true
+```
+
+To turn ON the tx flow control at run time(After the port is being added
+to OVS), the command-line input will be,
+
+`ovs-vsctl set Interface dpdk0 options:tx-flow-ctrl=true`
+
+The flow control parameters can be turned off by setting 'false' to the
+respective parameter. To disable the flow control at tx side,
+
+`ovs-vsctl set Interface dpdk0 options:tx-flow-ctrl=false`
+
+## <a name="vsperf"></a> 10. Vsperf
 
 Vsperf project goal is to develop vSwitch test framework that can be used to
 validate the suitability of different vSwitch implementations in a Telco deployment
@@ -848,5 +968,6 @@ Please report problems to bugs@openvswitch.org.
 [DPDK Docs]: http://dpdk.org/doc
 [libvirt]: http://libvirt.org/formatdomain.html
 [Guest VM using libvirt]: INSTALL.DPDK.md#ovstc
+[Vhost walkthrough]: INSTALL.DPDK.md#vhost
 [INSTALL DPDK]: INSTALL.DPDK.md#build
 [INSTALL OVS]: INSTALL.DPDK.md#build
