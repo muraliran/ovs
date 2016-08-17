@@ -20,6 +20,7 @@
 #include "flow.h"
 #include "hash.h"
 #include "hindex.h"
+#include "lflow.h"
 #include "ofctrl.h"
 #include "openflow/openflow.h"
 #include "openvswitch/dynamic-string.h"
@@ -368,6 +369,7 @@ run_S_CLEAR_FLOWS(void)
 
     /* Clear installed_flows, to match the state of the switch. */
     ovn_flow_table_clear();
+    lflow_reset_processing();
 
     /* Clear existing groups, to match the state of the switch. */
     if (groups) {
@@ -431,17 +433,12 @@ recv_S_UPDATE_FLOWS(const struct ofp_header *oh, enum ofptype type)
 enum mf_field_id
 ofctrl_run(const struct ovsrec_bridge *br_int)
 {
-    if (br_int) {
-        char *target;
-        target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int->name);
-        if (strcmp(target, rconn_get_target(swconn))) {
-            VLOG_INFO("%s: connecting to switch", target);
-            rconn_connect(swconn, target, target);
-        }
-        free(target);
-    } else {
-        rconn_disconnect(swconn);
+    char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int->name);
+    if (strcmp(target, rconn_get_target(swconn))) {
+        VLOG_INFO("%s: connecting to switch", target);
+        rconn_connect(swconn, target, target);
     }
+    free(target);
 
     rconn_run(swconn);
 
@@ -810,6 +807,11 @@ ovn_flow_table_clear(void)
     HMAP_FOR_EACH_SAFE (f, next, match_hmap_node, &match_flow_table) {
         hmap_remove(&match_flow_table, &f->match_hmap_node);
         hindex_remove(&uuid_flow_table, &f->uuid_hindex_node);
+        ovn_flow_destroy(f);
+    }
+
+    HMAP_FOR_EACH_SAFE (f, next, match_hmap_node, &installed_flows) {
+        hmap_remove(&installed_flows, &f->match_hmap_node);
         ovn_flow_destroy(f);
     }
 }
