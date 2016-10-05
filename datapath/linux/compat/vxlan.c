@@ -864,7 +864,7 @@ static int vxlan_build_skb(struct sk_buff *skb, struct dst_entry *dst,
 #else
 	fix_segment = NULL;
 #endif
-	err = ovs_iptunnel_handle_offloads(skb, udp_sum, type, fix_segment);
+	err = ovs_iptunnel_handle_offloads(skb, type, fix_segment);
 	if (err)
 		goto out_free;
 
@@ -2259,6 +2259,7 @@ out3:
 out2:
 	unregister_pernet_subsys(&vxlan_net_ops);
 out1:
+	pr_err("Error while initializing VxLAN %d\n", rc);
 	return rc;
 }
 

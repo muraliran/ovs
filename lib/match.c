@@ -1035,9 +1035,9 @@ format_flow_tunnel(struct ds *s, const struct match *match)
     if (wc->masks.tunnel.ip_ttl) {
         ds_put_format(s, "tun_ttl=%"PRIu8",", tnl->ip_ttl);
     }
-    if (wc->masks.tunnel.flags) {
+    if (wc->masks.tunnel.flags & FLOW_TNL_F_MASK) {
         format_flags_masked(s, "tun_flags", flow_tun_flag_to_string,
-                            tnl->flags,
+                            tnl->flags & FLOW_TNL_F_MASK,
                             wc->masks.tunnel.flags & FLOW_TNL_F_MASK,
                             FLOW_TNL_F_MASK);
         ds_put_char(s, ',');
@@ -1463,11 +1463,14 @@ minimatch_matches_flow(const struct minimatch *match,
 /* Appends a string representation of 'match' to 's'.  If 'priority' is
  * different from OFP_DEFAULT_PRIORITY, includes it in 's'. */
 void
-minimatch_format(const struct minimatch *match, struct ds *s, int priority)
+minimatch_format(const struct minimatch *match,
+                 const struct tun_table *tun_table,struct ds *s, int priority)
 {
     struct match megamatch;
 
     minimatch_expand(match, &megamatch);
+    megamatch.flow.tunnel.metadata.tab = tun_table;
+
     match_format(&megamatch, s, priority);
 }
 

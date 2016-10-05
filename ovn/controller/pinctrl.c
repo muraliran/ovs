@@ -354,6 +354,13 @@ pinctrl_handle_put_dhcp_opts(
     pin->packet = dp_packet_data(&pkt_out);
     pin->packet_len = dp_packet_size(&pkt_out);
 
+    /* Log the response. */
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(20, 40);
+    const struct eth_header *l2 = dp_packet_l2(&pkt_out);
+    VLOG_INFO_RL(&rl, "DHCP%s "ETH_ADDR_FMT" "IP_FMT"",
+                 msg_type == DHCP_MSG_OFFER ? "OFFER" : "ACK",
+                 ETH_ADDR_ARGS(l2->eth_src), IP_ARGS(*offer_ip));
+
     success = 1;
 exit:
     if (!ofperr) {
@@ -658,7 +665,7 @@ process_packet_in(const struct ofp_header *msg)
 
     struct ofputil_packet_in pin;
     struct ofpbuf continuation;
-    enum ofperr error = ofputil_decode_packet_in(msg, true, &pin,
+    enum ofperr error = ofputil_decode_packet_in(msg, true, NULL, &pin,
                                                  NULL, NULL, &continuation);
 
     if (error) {
@@ -1059,7 +1066,6 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
             }
             free(name);
         }
-        destroy_lport_addresses(laddrs);
         return;
     }
 
@@ -1302,7 +1308,16 @@ send_garp_run(const struct ovsrec_bridge *br_int, const char *chassis_id,
     sset_destroy(&localnet_vifs);
     sset_destroy(&local_l3gw_ports);
     simap_destroy(&localnet_ofports);
-    shash_destroy_free_data(&nat_addresses);
+
+    SHASH_FOR_EACH_SAFE (iter, next, &nat_addresses) {
+        struct lport_addresses *laddrs = iter->data;
+        destroy_lport_addresses(laddrs);
+        shash_delete(&nat_addresses, iter);
+        free(laddrs);
+    }
+    shash_destroy(&nat_addresses);
+
+    sset_destroy(&nat_ip_keys);
 }
 
 static void
@@ -1334,11 +1349,9 @@ reload_metadata(struct ofpbuf *ofpacts, const struct match *md)
     for (size_t i = 0; i < ARRAY_SIZE(md_fields); i++) {
         const struct mf_field *field = mf_from_id(md_fields[i]);
         if (!mf_is_all_wild(field, &md->wc)) {
-            struct ofpact_set_field *sf = ofpact_put_SET_FIELD(ofpacts);
-            sf->field = field;
-            sf->flow_has_vlan = false;
-            mf_get_value(field, &md->flow, &sf->value);
-            memset(&sf->mask, 0xff, field->n_bytes);
+            union mf_value value;
+            mf_get_value(field, &md->flow, &value);
+            ofpact_put_set_field(ofpacts, field, &value, NULL);
         }
     }
 }

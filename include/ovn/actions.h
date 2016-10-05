@@ -26,8 +26,8 @@
 #include "openvswitch/uuid.h"
 #include "util.h"
 
+struct expr;
 struct lexer;
-struct ofpact_set_field;
 struct ofpbuf;
 struct shash;
 struct simap;
@@ -67,7 +67,8 @@ struct simap;
     OVNACT(GET_ND,        ovnact_get_mac_bind)      \
     OVNACT(PUT_ND,        ovnact_put_mac_bind)      \
     OVNACT(PUT_DHCPV4_OPTS, ovnact_put_dhcp_opts)   \
-    OVNACT(PUT_DHCPV6_OPTS, ovnact_put_dhcp_opts)
+    OVNACT(PUT_DHCPV6_OPTS, ovnact_put_dhcp_opts)   \
+    OVNACT(SET_QUEUE,       ovnact_set_queue)
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -151,13 +152,6 @@ struct ovnact_load {
     union expr_constant imm;
 };
 
-void ovnact_load_to_ofpact_set_field(const struct ovnact_load *,
-                                     bool (*lookup_port)(const void *aux,
-                                                         const char *port_name,
-                                                         unsigned int *portp),
-                                     const void *aux,
-                                     struct ofpact_set_field *);
-
 /* OVNACT_MOVE, OVNACT_EXCHANGE. */
 struct ovnact_move {
     struct ovnact ovnact;
@@ -225,6 +219,19 @@ struct ovnact_put_dhcp_opts {
     struct expr_field dst;      /* 1-bit destination field. */
     struct ovnact_dhcp_option *options;
     size_t n_options;
+};
+
+/* Valid arguments to SET_QUEUE action.
+ *
+ * QDISC_MIN_QUEUE_ID is the default queue, so user-defined queues should
+ * start at QDISC_MIN_QUEUE_ID+1. */
+#define QDISC_MIN_QUEUE_ID  0
+#define QDISC_MAX_QUEUE_ID  0xf000
+
+/* OVNACT_SET_QUEUE. */
+struct ovnact_set_queue {
+    struct ovnact ovnact;
+    uint16_t queue_id;
 };
 
 /* Internal use by the helpers below. */
@@ -298,8 +305,9 @@ struct group_table {
 struct group_info {
     struct hmap_node hmap_node;
     struct ds group;
-    struct uuid lflow_uuid;
     uint32_t group_id;
+    bool new_group_id;  /* 'True' if 'group_id' was reserved from
+                         * group_table's 'group_ids' bitmap. */
 };
 
 enum action_opcode {
@@ -406,14 +414,14 @@ struct ovnact_encode_params {
                         unsigned int *portp);
     const void *aux;
 
+    /* 'true' if the flow is for a switch. */
+    bool is_switch;
+
     /* A map from a port name to its connection tracking zone. */
     const struct simap *ct_zones;
 
     /* A struct to figure out the group_id for group actions. */
     struct group_table *group_table;
-
-    /* The logical flow uuid that drove this action. */
-    struct uuid lflow_uuid;
 
     /* OVN maps each logical flow table (ltable), one-to-one, onto a physical
      * OpenFlow flow table (ptable).  A number of parameters describe this

@@ -388,6 +388,19 @@ Logical flow commands:\n\
   lflow-add LSWITCH DIRECTION PRIORITY MATCH ACTION FLOWID [FLOWTYPE]\n\
                             add a logical flow identified by FLOWID\n\
   lflow-del LSWITCH FLOWID  delete a logical flow identified by FLOWID\n\
+LB commands:\n\
+  lb-add LB VIP[:PORT] IP[:PORT]... [PROTOCOL]\n\
+                            create a load-balancer or add a VIP to an\n\
+                            existing load balancer\n\
+  lb-del LB [VIP]           remove a load-balancer or just the VIP from\n\
+                            the load balancer\n\
+  lb-list [LB]              print load-balancers\n\
+  lr-lb-add ROUTER LB       add a load-balancer to ROUTER\n\
+  lr-lb-del ROUTER [LB]     remove load-balancers from ROUTER\n\
+  lr-lb-list ROUTER         print load-balancers\n\
+  ls-lb-add SWITCH LB       add a load-balancer to SWITCH\n\
+  ls-lb-del SWITCH [LB]     remove load-balancers from SWITCH\n\
+  ls-lb-list SWITCH         print load-balancers\n\
 \n\
 DHCP Options commands:\n\
   dhcp-options-create CIDR [EXTERNAL_IDS]\n\
@@ -495,6 +508,40 @@ ls_by_name_or_uuid(struct ctl_context *ctx, const char *id, bool must_exist)
     }
 
     return ls;
+}
+
+static const struct nbrec_load_balancer *
+lb_by_name_or_uuid(struct ctl_context *ctx, const char *id, bool must_exist)
+{
+    const struct nbrec_load_balancer *lb = NULL;
+
+    struct uuid lb_uuid;
+    bool is_uuid = uuid_from_string(&lb_uuid, id);
+    if (is_uuid) {
+        lb = nbrec_load_balancer_get_for_uuid(ctx->idl, &lb_uuid);
+    }
+
+    if (!lb) {
+        const struct nbrec_load_balancer *iter;
+
+        NBREC_LOAD_BALANCER_FOR_EACH(iter, ctx->idl) {
+            if (strcmp(iter->name, id)) {
+                continue;
+            }
+            if (lb) {
+                ctl_fatal("Multiple load balancers named '%s'.  "
+                          "Use a UUID.", id);
+            }
+            lb = iter;
+        }
+    }
+
+    if (!lb && must_exist) {
+        ctl_fatal("%s: load balancer %s not found", id,
+                is_uuid ? "UUID" : "name");
+    }
+
+    return lb;
 }
 
 /* Given pointer to logical router, this routine prints the router
@@ -780,12 +827,13 @@ nbctl_lsp_add(struct ctl_context *ctx)
                           lsp_name, lsp->parent_name);
             }
 
-            if (!lsp->n_tag) {
-                ctl_fatal("%s: port already exists but has no tag",
+            if (!lsp->n_tag_request) {
+                ctl_fatal("%s: port already exists but has no tag_request",
                           lsp_name);
-            } else if (lsp->tag[0] != tag) {
+            } else if (lsp->tag_request[0] != tag) {
                 ctl_fatal("%s: port already exists with different "
-                          "tag %"PRId64, lsp_name, lsp->tag[0]);
+                          "tag_request %"PRId64, lsp_name,
+                          lsp->tag_request[0]);
             }
         } else {
             if (lsp->parent_name) {
@@ -802,7 +850,7 @@ nbctl_lsp_add(struct ctl_context *ctx)
     nbrec_logical_switch_port_set_name(lsp, lsp_name);
     if (tag >= 0) {
         nbrec_logical_switch_port_set_parent_name(lsp, parent_name);
-        nbrec_logical_switch_port_set_tag(lsp, &tag, 1);
+        nbrec_logical_switch_port_set_tag_request(lsp, &tag, 1);
     }
 
     /* Insert the logical port into the logical switch. */
@@ -1116,7 +1164,6 @@ nbctl_lsp_set_dhcpv4_options(struct ctl_context *ctx)
         if (error){
             free(error);
             ctl_fatal("DHCP options cidr '%s' is not IPv4", dhcp_opt->cidr);
-            return;
         }
     }
     nbrec_logical_switch_port_set_dhcpv4_options(lsp, dhcp_opt);
@@ -1350,6 +1397,424 @@ clflow_by_name_or_uuid(struct ctl_context *ctx, const char *id,
 
 
 static void
+nbctl_lb_add(struct ctl_context *ctx)
+{
+    const char *lb_name = ctx->argv[1];
+    const char *lb_vip = ctx->argv[2];
+    char *lb_ips = ctx->argv[3];
+
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    bool add_duplicate = shash_find(&ctx->options, "--add-duplicate") != NULL;
+
+    const char *lb_proto;
+    bool is_update_proto = false;
+    bool is_vip_with_port = true;
+
+    if (ctx->argc == 4) {
+        /* Default protocol. */
+        lb_proto = "tcp";
+    } else {
+        /* Validate protocol. */
+        lb_proto = ctx->argv[4];
+        is_update_proto = true;
+        if (strcmp(lb_proto, "tcp") && strcmp(lb_proto, "udp")) {
+            ctl_fatal("%s: protocol must be one of \"tcp\", \"udp\".",
+                    lb_proto);
+        }
+    }
+
+    ovs_be32 ipv4 = 0;
+    ovs_be16 port = 0;
+    char *error = ip_parse_port(lb_vip, &ipv4, &port);
+    if (error) {
+        free(error);
+        if (!ip_parse(lb_vip, &ipv4)) {
+            ctl_fatal("%s: should be an IPv4 address (or an IPv4 address "
+                    "and a port number with : as a separator).", lb_vip);
+        }
+
+        if (is_update_proto) {
+            ctl_fatal("Protocol is unnecessary when no port of vip "
+                    "is given.");
+        }
+        is_vip_with_port = false;
+    }
+
+    char *token = NULL, *save_ptr = NULL;
+    struct ds lb_ips_new = DS_EMPTY_INITIALIZER;
+    for (token = strtok_r(lb_ips, ",", &save_ptr);
+            token != NULL; token = strtok_r(NULL, ",", &save_ptr)) {
+        if (is_vip_with_port) {
+            error = ip_parse_port(token, &ipv4, &port);
+            if (error) {
+                free(error);
+                ds_destroy(&lb_ips_new);
+                ctl_fatal("%s: should be an IPv4 address and a port "
+                        "number with : as a separator.", token);
+            }
+        } else {
+            if (!ip_parse(token, &ipv4)) {
+                ds_destroy(&lb_ips_new);
+                ctl_fatal("%s: should be an IPv4 address.", token);
+            }
+        }
+        ds_put_format(&lb_ips_new, "%s%s",
+                lb_ips_new.length ? "," : "", token);
+    }
+
+    const struct nbrec_load_balancer *lb = NULL;
+    if (!add_duplicate) {
+        lb = lb_by_name_or_uuid(ctx, lb_name, false);
+        if (lb) {
+            if (smap_get(&lb->vips, lb_vip)) {
+                if (!may_exist) {
+                    ds_destroy(&lb_ips_new);
+                    ctl_fatal("%s: a load balancer with this vip (%s) "
+                            "already exists", lb_name, lb_vip);
+                }
+                /* Update the vips. */
+                smap_replace(CONST_CAST(struct smap *, &lb->vips),
+                        lb_vip, ds_cstr(&lb_ips_new));
+            } else {
+                /* Add the new vips. */
+                smap_add(CONST_CAST(struct smap *, &lb->vips),
+                        lb_vip, ds_cstr(&lb_ips_new));
+            }
+
+            /* Update the load balancer. */
+            if (is_update_proto) {
+                nbrec_load_balancer_verify_protocol(lb);
+                nbrec_load_balancer_set_protocol(lb, lb_proto);
+            }
+            nbrec_load_balancer_verify_vips(lb);
+            nbrec_load_balancer_set_vips(lb, &lb->vips);
+            ds_destroy(&lb_ips_new);
+            return;
+        }
+    }
+
+    /* Create the load balancer. */
+    lb = nbrec_load_balancer_insert(ctx->txn);
+    nbrec_load_balancer_set_name(lb, lb_name);
+    nbrec_load_balancer_set_protocol(lb, lb_proto);
+    smap_add(CONST_CAST(struct smap *, &lb->vips),
+            lb_vip, ds_cstr(&lb_ips_new));
+    nbrec_load_balancer_set_vips(lb, &lb->vips);
+    ds_destroy(&lb_ips_new);
+}
+
+static void
+nbctl_lb_del(struct ctl_context *ctx)
+{
+    const char *id = ctx->argv[1];
+    const struct nbrec_load_balancer *lb = NULL;
+    bool must_exist = !shash_find(&ctx->options, "--if-exists");
+
+    lb = lb_by_name_or_uuid(ctx, id, false);
+    if (!lb) {
+        return;
+    }
+
+    if (ctx->argc == 3) {
+        const char *lb_vip = ctx->argv[2];
+        if (smap_get(&lb->vips, lb_vip)) {
+            smap_remove(CONST_CAST(struct smap *, &lb->vips), lb_vip);
+            if (smap_is_empty(&lb->vips)) {
+                nbrec_load_balancer_delete(lb);
+                return;
+            }
+
+            /* Delete the vip of the load balancer. */
+            nbrec_load_balancer_verify_vips(lb);
+            nbrec_load_balancer_set_vips(lb, &lb->vips);
+            return;
+        }
+        if (must_exist) {
+            ctl_fatal("vip %s is not part of the load balancer.",
+                    lb_vip);
+        }
+        return;
+    }
+    nbrec_load_balancer_delete(lb);
+}
+
+static void
+lb_info_add_smap(const struct nbrec_load_balancer *lb,
+                 struct smap *lbs)
+{
+    struct ds key = DS_EMPTY_INITIALIZER;
+    struct ds val = DS_EMPTY_INITIALIZER;
+    char *error, *protocol;
+    ovs_be32 ipv4 = 0;
+    ovs_be16 port = 0;
+
+    const struct smap_node **nodes = smap_sort(&lb->vips);
+    if (nodes) {
+        for (int i = 0; i < smap_count(&lb->vips); i++) {
+            const struct smap_node *node = nodes[i];
+            protocol = lb->protocol;
+            error = ip_parse_port(node->key, &ipv4, &port);
+            if (error) {
+                free(error);
+                protocol = "tcp/udp";
+            }
+
+            i == 0 ? ds_put_format(&val,
+                        UUID_FMT "    %-20.16s%-11.7s%-25.21s%s",
+                        UUID_ARGS(&lb->header_.uuid),
+                        lb->name, protocol,
+                        node->key, node->value)
+                   : ds_put_format(&val, "\n%60s%-11.7s%-25.21s%s",
+                        "", protocol,
+                        node->key, node->value);
+        }
+
+        ds_put_format(&key, "%-20.16s", lb->name);
+        smap_add(lbs, ds_cstr(&key), ds_cstr(&val));
+
+        ds_destroy(&key);
+        ds_destroy(&val);
+        free(nodes);
+    }
+}
+
+static void
+lb_info_print(struct ctl_context *ctx, struct smap *lbs)
+{
+    const struct smap_node **nodes = smap_sort(lbs);
+    if (nodes) {
+        ds_put_format(&ctx->output, "%-40.36s%-20.16s%-11.7s%-25.21s%s\n",
+                "UUID", "LB", "PROTO", "VIP", "IPs");
+        for (size_t i = 0; i < smap_count(lbs); i++) {
+            const struct smap_node *node = nodes[i];
+            ds_put_format(&ctx->output, "%s\n", node->value);
+        }
+
+        free(nodes);
+    }
+}
+
+static void
+lb_info_list_all(struct ctl_context *ctx,
+                 const char *lb_name, bool lb_check)
+{
+    const struct nbrec_load_balancer *lb;
+    struct smap lbs = SMAP_INITIALIZER(&lbs);
+
+    NBREC_LOAD_BALANCER_FOR_EACH(lb, ctx->idl) {
+        if (lb_check && strcmp(lb->name, lb_name)) {
+            continue;
+        }
+        lb_info_add_smap(lb, &lbs);
+    }
+
+    lb_info_print(ctx, &lbs);
+    smap_destroy(&lbs);
+}
+
+static void
+nbctl_lb_list(struct ctl_context *ctx)
+{
+    if (ctx->argc == 1) {
+        lb_info_list_all(ctx, NULL, false);
+    } else if (ctx->argc == 2) {
+        lb_info_list_all(ctx, ctx->argv[1], true);
+    }
+}
+
+static void
+nbctl_lr_lb_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_router *lr;
+    const struct nbrec_load_balancer *new_lb;
+
+    lr = lr_by_name_or_uuid(ctx, ctx->argv[1], true);
+    new_lb = lb_by_name_or_uuid(ctx, ctx->argv[2], true);
+
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    for (int i = 0; i < lr->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *lb
+            = lr->load_balancer[i];
+
+        if (uuid_equals(&new_lb->header_.uuid, &lb->header_.uuid)) {
+            if (may_exist) {
+                return;
+            }
+            ctl_fatal(UUID_FMT " : a load balancer with this UUID already "
+                    "exists", UUID_ARGS(&lb->header_.uuid));
+        }
+    }
+
+    /* Insert the load balancer into the logical router. */
+    nbrec_logical_router_verify_load_balancer(lr);
+    struct nbrec_load_balancer **new_lbs
+        = xmalloc(sizeof *new_lbs * (lr->n_load_balancer + 1));
+
+    memcpy(new_lbs, lr->load_balancer, sizeof *new_lbs * lr->n_load_balancer);
+    new_lbs[lr->n_load_balancer] = CONST_CAST(struct nbrec_load_balancer *,
+            new_lb);
+    nbrec_logical_router_set_load_balancer(lr, new_lbs,
+            lr->n_load_balancer + 1);
+    free(new_lbs);
+}
+
+static void
+nbctl_lr_lb_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_router *lr;
+    const struct nbrec_load_balancer *del_lb;
+    lr = lr_by_name_or_uuid(ctx, ctx->argv[1], true);
+
+    if (ctx->argc == 2) {
+        /* If load-balancer is not specified, remove
+         * all load-balancers from the logical router. */
+        nbrec_logical_router_verify_load_balancer(lr);
+        nbrec_logical_router_set_load_balancer(lr, NULL, 0);
+        return;
+    }
+
+    del_lb = lb_by_name_or_uuid(ctx, ctx->argv[2], true);
+    for (size_t i = 0; i < lr->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *lb
+            = lr->load_balancer[i];
+
+        if (uuid_equals(&del_lb->header_.uuid, &lb->header_.uuid)) {
+            /* Remove the matching rule. */
+            nbrec_logical_router_verify_load_balancer(lr);
+
+            struct nbrec_load_balancer **new_lbs
+                = xmemdup(lr->load_balancer,
+                    sizeof *new_lbs * lr->n_load_balancer);
+            new_lbs[i] = lr->load_balancer[lr->n_load_balancer - 1];
+            nbrec_logical_router_set_load_balancer(lr, new_lbs,
+                                          lr->n_load_balancer - 1);
+            free(new_lbs);
+            return;
+        }
+    }
+
+    bool must_exist = !shash_find(&ctx->options, "--if-exists");
+    if (must_exist) {
+        ctl_fatal("load balancer %s is not part of any logical router.",
+                del_lb->name);
+    }
+}
+
+static void
+nbctl_lr_lb_list(struct ctl_context *ctx)
+{
+    const char *lr_name = ctx->argv[1];
+    const struct nbrec_logical_router *lr;
+    struct smap lbs = SMAP_INITIALIZER(&lbs);
+
+    lr = lr_by_name_or_uuid(ctx, lr_name, true);
+    for (int i = 0; i < lr->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *lb
+            = lr->load_balancer[i];
+        lb_info_add_smap(lb, &lbs);
+    }
+
+    lb_info_print(ctx, &lbs);
+    smap_destroy(&lbs);
+}
+
+static void
+nbctl_ls_lb_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *ls;
+    const struct nbrec_load_balancer *new_lb;
+
+    ls = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
+    new_lb = lb_by_name_or_uuid(ctx, ctx->argv[2], true);
+
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    for (int i = 0; i < ls->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *lb
+            = ls->load_balancer[i];
+
+        if (uuid_equals(&new_lb->header_.uuid, &lb->header_.uuid)) {
+            if (may_exist) {
+                return;
+            }
+            ctl_fatal(UUID_FMT " : a load balancer with this UUID already "
+                    "exists", UUID_ARGS(&lb->header_.uuid));
+        }
+    }
+
+    /* Insert the load balancer into the logical switch. */
+    nbrec_logical_switch_verify_load_balancer(ls);
+    struct nbrec_load_balancer **new_lbs
+        = xmalloc(sizeof *new_lbs * (ls->n_load_balancer + 1));
+
+    memcpy(new_lbs, ls->load_balancer, sizeof *new_lbs * ls->n_load_balancer);
+    new_lbs[ls->n_load_balancer] = CONST_CAST(struct nbrec_load_balancer *,
+            new_lb);
+    nbrec_logical_switch_set_load_balancer(ls, new_lbs,
+            ls->n_load_balancer + 1);
+    free(new_lbs);
+}
+
+static void
+nbctl_ls_lb_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *ls;
+    const struct nbrec_load_balancer *del_lb;
+    ls = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
+
+    if (ctx->argc == 2) {
+        /* If load-balancer is not specified, remove
+         * all load-balancers from the logical switch. */
+        nbrec_logical_switch_verify_load_balancer(ls);
+        nbrec_logical_switch_set_load_balancer(ls, NULL, 0);
+        return;
+    }
+
+    del_lb = lb_by_name_or_uuid(ctx, ctx->argv[2], true);
+    for (size_t i = 0; i < ls->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *lb
+            = ls->load_balancer[i];
+
+        if (uuid_equals(&del_lb->header_.uuid, &lb->header_.uuid)) {
+            /* Remove the matching rule. */
+            nbrec_logical_switch_verify_load_balancer(ls);
+
+            struct nbrec_load_balancer **new_lbs
+                = xmemdup(ls->load_balancer,
+                        sizeof *new_lbs * ls->n_load_balancer);
+            new_lbs[i] = ls->load_balancer[ls->n_load_balancer - 1];
+            nbrec_logical_switch_set_load_balancer(ls, new_lbs,
+                                          ls->n_load_balancer - 1);
+            free(new_lbs);
+            return;
+        }
+    }
+
+    bool must_exist = !shash_find(&ctx->options, "--if-exists");
+    if (must_exist) {
+        ctl_fatal("load balancer %s is not part of any logical switch.",
+                del_lb->name);
+    }
+}
+
+static void
+nbctl_ls_lb_list(struct ctl_context *ctx)
+{
+    const char *ls_name = ctx->argv[1];
+    const struct nbrec_logical_switch *ls;
+    struct smap lbs = SMAP_INITIALIZER(&lbs);
+
+    ls = ls_by_name_or_uuid(ctx, ls_name, true);
+    for (int i = 0; i < ls->n_load_balancer; i++) {
+        const struct nbrec_load_balancer *lb
+            = ls->load_balancer[i];
+        lb_info_add_smap(lb, &lbs);
+    }
+
+    lb_info_print(ctx, &lbs);
+    smap_destroy(&lbs);
+}
+
+static void
 remove_clflow(const struct nbrec_logical_switch *lswitch, size_t idx)
 {
     const struct nbrec_custom_lflow *clflow = lswitch->clflows[idx];
@@ -1540,7 +2005,6 @@ nbctl_dhcp_options_create(struct ctl_context *ctx)
         if (error) {
             free(error);
             ctl_fatal("Invalid cidr format '%s'", ctx->argv[1]);
-            return;
         }
     }
 
@@ -1730,6 +2194,7 @@ nbctl_lr_route_add(struct ctl_context *ctx)
         }
 
         if (!may_exist) {
+            free(rt_prefix);
             ctl_fatal("duplicate prefix: %s", prefix);
         }
 
@@ -1929,13 +2394,13 @@ nbctl_lrp_add(struct ctl_context *ctx)
         struct sset orig_networks = SSET_INITIALIZER(&orig_networks);
         sset_add_array(&orig_networks, lrp->networks, lrp->n_networks);
 
-        if (!sset_equals(&orig_networks, &new_networks)) {
+        bool same_networks = sset_equals(&orig_networks, &new_networks);
+        sset_destroy(&orig_networks);
+        sset_destroy(&new_networks);
+        if (!same_networks) {
             ctl_fatal("%s: port already exists with different network",
                       lrp_name);
         }
-
-        sset_destroy(&orig_networks);
-        sset_destroy(&new_networks);
 
         /* Special-case sanity-check of peer ports. */
         const char *peer = NULL;
@@ -2609,6 +3074,25 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_lflow_add, NULL, "", RW },
     { "lflow-del", 2, 2, "LSWITCH FLOWID", NULL,
       nbctl_lflow_del, NULL, "", RW },
+
+    /* load balancer commands. */
+    { "lb-add", 3, 4, "LB VIP[:PORT] IP[:PORT]... [PROTOCOL]", NULL,
+      nbctl_lb_add, NULL, "--may-exist,--add-duplicate", RW },
+    { "lb-del", 1, 2, "LB [VIP]", NULL, nbctl_lb_del, NULL,
+        "--if-exists", RW },
+    { "lb-list", 0, 1, "[LB]", NULL, nbctl_lb_list, NULL, "", RO },
+    { "lr-lb-add", 2, 2, "ROUTER LB", NULL, nbctl_lr_lb_add, NULL,
+        "--may-exist", RW },
+    { "lr-lb-del", 1, 2, "ROUTER [LB]", NULL, nbctl_lr_lb_del, NULL,
+        "--if-exists", RW },
+    { "lr-lb-list", 1, 1, "ROUTER", NULL, nbctl_lr_lb_list, NULL,
+        "", RO },
+    { "ls-lb-add", 2, 2, "SWITCH LB", NULL, nbctl_ls_lb_add, NULL,
+        "--may-exist", RW },
+    { "ls-lb-del", 1, 2, "SWITCH [LB]", NULL, nbctl_ls_lb_del, NULL,
+        "--if-exists", RW },
+    { "ls-lb-list", 1, 1, "SWITCH", NULL, nbctl_ls_lb_list, NULL,
+        "", RO },
 
     /* DHCP_Options commands */
     {"dhcp-options-create", 1, INT_MAX, "CIDR [EXTERNAL:IDS]", NULL,

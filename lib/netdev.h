@@ -97,7 +97,6 @@ struct netdev_tunnel_config {
     bool tos_inherit;
 
     bool csum;
-    bool ipsec;
     bool dont_fragment;
 };
 
@@ -133,6 +132,8 @@ const char *netdev_get_type(const struct netdev *);
 const char *netdev_get_type_from_name(const char *);
 int netdev_get_mtu(const struct netdev *, int *mtup);
 int netdev_set_mtu(struct netdev *, int mtu);
+void netdev_mtu_user_config(struct netdev *, bool);
+bool netdev_mtu_is_user_config(struct netdev *);
 int netdev_get_ifindex(const struct netdev *);
 int netdev_set_tx_multiq(struct netdev *, unsigned int n_txq);
 
