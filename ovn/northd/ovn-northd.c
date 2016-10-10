@@ -96,22 +96,23 @@ enum ovn_datapath_type {
  * form the stage's full name, e.g. S_SWITCH_IN_PORT_SEC_L2,
  * S_ROUTER_OUT_DELIVERY. */
 enum ovn_stage {
-#define PIPELINE_STAGES                                               \
-    /* Logical switch ingress stages. */                              \
-    PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_L2,    0, "ls_in_port_sec_l2")     \
-    PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_IP,    1, "ls_in_port_sec_ip")     \
-    PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_ND,    2, "ls_in_port_sec_nd")     \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        3, "ls_in_pre_acl")      \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_LB,         4, "ls_in_pre_lb")         \
-    PIPELINE_STAGE(SWITCH, IN,  PRE_STATEFUL,   5, "ls_in_pre_stateful")    \
-    PIPELINE_STAGE(SWITCH, IN,  ACL,            6, "ls_in_acl")          \
-    PIPELINE_STAGE(SWITCH, IN,  LB,             7, "ls_in_lb")           \
-    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,       8, "ls_in_stateful")     \
-    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,     9, "ls_in_arp_rsp")      \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,   10, "ls_in_dhcp_options") \
-    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE,  11, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  CUSTOM_FWD,     12, "ls_in_cust_fwd")      \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,        13, "ls_in_l2_lkup")      \
+#define PIPELINE_STAGES                                                   \
+    /* Logical switch ingress stages. */                                  \
+    PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_L2,    0, "ls_in_port_sec_l2")   \
+    PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_IP,    1, "ls_in_port_sec_ip")   \
+    PIPELINE_STAGE(SWITCH, IN,  PORT_SEC_ND,    2, "ls_in_port_sec_nd")   \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_ACL,        3, "ls_in_pre_acl")       \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_LB,         4, "ls_in_pre_lb")        \
+    PIPELINE_STAGE(SWITCH, IN,  PRE_STATEFUL,   5, "ls_in_pre_stateful")  \
+    PIPELINE_STAGE(SWITCH, IN,  ACL,            6, "ls_in_acl")           \
+    PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       7, "ls_in_qos_mark")      \
+    PIPELINE_STAGE(SWITCH, IN,  LB,             8, "ls_in_lb")            \
+    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,       9, "ls_in_stateful")      \
+    PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    10, "ls_in_arp_rsp")       \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  11, "ls_in_dhcp_options")  \
+    PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 12, "ls_in_dhcp_response") \
+    PIPELINE_STAGE(SWITCH, IN,  CUSTOM_FWD,    13, "ls_in_cust_fwd")      \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       14, "ls_in_l2_lkup")       \
                                                                       \
     /* Logical switch egress stages. */                               \
     PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")     \
@@ -119,9 +120,10 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, OUT, PRE_STATEFUL, 2, "ls_out_pre_stateful")  \
     PIPELINE_STAGE(SWITCH, OUT, LB,           3, "ls_out_lb")            \
     PIPELINE_STAGE(SWITCH, OUT, ACL,          4, "ls_out_acl")            \
-    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,     5, "ls_out_stateful")       \
-    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP,  6, "ls_out_port_sec_ip")    \
-    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2,  7, "ls_out_port_sec_l2")    \
+    PIPELINE_STAGE(SWITCH, OUT, QOS_MARK,     5, "ls_out_qos_mark")       \
+    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,     6, "ls_out_stateful")       \
+    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP,  7, "ls_out_port_sec_ip")    \
+    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2,  8, "ls_out_port_sec_l2")    \
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,   0, "lr_in_admission")    \
@@ -837,7 +839,7 @@ ipam_insert_lsp_addresses(struct ovn_datapath *od, struct ovn_port *op,
                           char *address)
 {
     if (!od || !op || !address || !strcmp(address, "unknown")
-        || !strcmp(address, "dynamic")) {
+        || is_dynamic_lsp_address(address)) {
         return;
     }
 
@@ -962,7 +964,7 @@ ipam_get_unused_ip(struct ovn_datapath *od, uint32_t subnet, uint32_t mask)
 
 static bool
 ipam_allocate_addresses(struct ovn_datapath *od, struct ovn_port *op,
-                        ovs_be32 subnet, ovs_be32 mask)
+                        const char *addrspec, ovs_be32 subnet, ovs_be32 mask)
 {
     if (!od || !op || !op->nbsp) {
         return false;
@@ -974,16 +976,26 @@ ipam_allocate_addresses(struct ovn_datapath *od, struct ovn_port *op,
     }
 
     struct eth_addr mac;
-    uint64_t mac64 = ipam_get_unused_mac();
-    if (!mac64) {
-        return false;
+    bool check_mac;
+    int n = 0;
+
+    if (ovs_scan(addrspec, ETH_ADDR_SCAN_FMT" dynamic%n",
+                 ETH_ADDR_SCAN_ARGS(mac), &n)
+        && addrspec[n] == '\0') {
+        check_mac = true;
+    } else {
+        uint64_t mac64 = ipam_get_unused_mac();
+        if (!mac64) {
+            return false;
+        }
+        eth_addr_from_uint64(mac64, &mac);
+        check_mac = false;
     }
-    eth_addr_from_uint64(mac64, &mac);
 
     /* Add MAC/IP to MACAM/IPAM hmaps if both addresses were allocated
      * successfully. */
     ipam_insert_ip(od, ip, false);
-    ipam_insert_mac(&mac, false);
+    ipam_insert_mac(&mac, check_mac);
 
     char *new_addr = xasprintf(ETH_ADDR_FMT" "IP_FMT,
                                ETH_ADDR_ARGS(mac), IP_ARGS(htonl(ip)));
@@ -1040,9 +1052,10 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
                 }
 
                 for (size_t j = 0; j < nbsp->n_addresses; j++) {
-                    if (!strcmp(nbsp->addresses[j], "dynamic")
+                    if (is_dynamic_lsp_address(nbsp->addresses[j])
                         && !nbsp->dynamic_addresses) {
-                        if (!ipam_allocate_addresses(od, op, subnet, mask)
+                        if (!ipam_allocate_addresses(od, op,
+                                             nbsp->addresses[j], subnet, mask)
                             || !extract_lsp_addresses(nbsp->dynamic_addresses,
                                             &op->lsp_addrs[op->n_lsp_addrs])) {
                             static struct vlog_rate_limit rl
@@ -1219,7 +1232,7 @@ join_logical_ports(struct northd_context *ctx,
                     if (!strcmp(nbsp->addresses[j], "unknown")) {
                         continue;
                     }
-                    if (!strcmp(nbsp->addresses[j], "dynamic")) {
+                    if (is_dynamic_lsp_address(nbsp->addresses[j])) {
                         if (nbsp->dynamic_addresses) {
                             if (!extract_lsp_addresses(nbsp->dynamic_addresses,
                                             &op->lsp_addrs[op->n_lsp_addrs])) {
@@ -1646,6 +1659,7 @@ struct ovn_lflow {
     uint16_t priority;
     char *match;
     char *actions;
+    const char *where;
 };
 
 static size_t
@@ -1669,29 +1683,35 @@ ovn_lflow_equal(const struct ovn_lflow *a, const struct ovn_lflow *b)
 
 static void
 ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
-              enum ovn_stage stage, uint16_t priority,
-              char *match, char *actions)
+               enum ovn_stage stage, uint16_t priority,
+               char *match, char *actions, const char *where)
 {
     lflow->od = od;
     lflow->stage = stage;
     lflow->priority = priority;
     lflow->match = match;
     lflow->actions = actions;
+    lflow->where = where;
 }
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
 static void
-ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
-              enum ovn_stage stage, uint16_t priority,
-              const char *match, const char *actions)
+ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
+                 enum ovn_stage stage, uint16_t priority,
+                 const char *match, const char *actions, const char *where)
 {
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
 
     struct ovn_lflow *lflow = xmalloc(sizeof *lflow);
     ovn_lflow_init(lflow, od, stage, priority,
-                   xstrdup(match), xstrdup(actions));
+                   xstrdup(match), xstrdup(actions), where);
     hmap_insert(lflow_map, &lflow->hmap_node, ovn_lflow_hash(lflow));
 }
+
+/* Adds a row with the specified contents to the Logical_Flow table. */
+#define ovn_lflow_add(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS) \
+    ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS,  \
+                     OVS_SOURCE_LOCATOR)
 
 static struct ovn_lflow *
 ovn_lflow_find(struct hmap *lflows, struct ovn_datapath *od,
@@ -1700,7 +1720,8 @@ ovn_lflow_find(struct hmap *lflows, struct ovn_datapath *od,
 {
     struct ovn_lflow target;
     ovn_lflow_init(&target, od, stage, priority,
-                   CONST_CAST(char *, match), CONST_CAST(char *, actions));
+                   CONST_CAST(char *, match), CONST_CAST(char *, actions),
+                   NULL);
 
     struct ovn_lflow *lflow;
     HMAP_FOR_EACH_WITH_HASH (lflow, hmap_node, ovn_lflow_hash(&target),
@@ -2635,6 +2656,29 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
 }
 
 static void
+build_qos(struct ovn_datapath *od, struct hmap *lflows) {
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_QOS_MARK, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_QOS_MARK, 0, "1", "next;");
+
+    for (size_t i = 0; i < od->nbs->n_qos_rules; i++) {
+        struct nbrec_qos *qos = od->nbs->qos_rules[i];
+        bool ingress = !strcmp(qos->direction, "from-lport") ? true :false;
+        enum ovn_stage stage = ingress ? S_SWITCH_IN_QOS_MARK : S_SWITCH_OUT_QOS_MARK;
+
+        if (!strcmp(qos->key_action, "dscp")) {
+            struct ds dscp_action = DS_EMPTY_INITIALIZER;
+
+            ds_put_format(&dscp_action, "ip.dscp = %d; next;",
+                          (uint8_t)qos->value_action);
+            ovn_lflow_add(lflows, od, stage,
+                          qos->priority,
+                          qos->match, ds_cstr(&dscp_action));
+            ds_destroy(&dscp_action);
+        }
+    }
+}
+
+static void
 build_lb(struct ovn_datapath *od, struct hmap *lflows)
 {
     /* Ingress and Egress LB Table (Priority 0): Packets are allowed by
@@ -2707,12 +2751,12 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows)
             /* New connections in Ingress table. */
             char *action = xasprintf("ct_lb(%s);", node->value);
             struct ds match = DS_EMPTY_INITIALIZER;
-            ds_put_format(&match, "ct.new && ip && ip4.dst == %s", ip_address);
+            ds_put_format(&match, "ct.new && ip4.dst == %s", ip_address);
             if (port) {
                 if (lb->protocol && !strcmp(lb->protocol, "udp")) {
-                    ds_put_format(&match, " && udp && udp.dst == %d", port);
+                    ds_put_format(&match, " && udp.dst == %d", port);
                 } else {
-                    ds_put_format(&match, " && tcp && tcp.dst == %d", port);
+                    ds_put_format(&match, " && tcp.dst == %d", port);
                 }
                 ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL,
                               120, ds_cstr(&match), action);
@@ -2739,7 +2783,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
     struct ds actions = DS_EMPTY_INITIALIZER;
 
     /* Build pre-ACL and ACL tables for both ingress and egress.
-     * Ingress tables 3 and 4.  Egress tables 0 and 1. */
+     * Ingress tables 3 through 9.  Egress tables 0 through 6. */
     struct ovn_datapath *od;
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
@@ -2750,6 +2794,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         build_pre_lb(od, lflows);
         build_pre_stateful(od, lflows);
         build_acls(od, lflows);
+        build_qos(od, lflows);
         build_lb(od, lflows);
         build_stateful(od, lflows);
     }
@@ -2821,7 +2866,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_IP, 0, "1", "next;");
     }
 
-    /* Ingress table 9: ARP/ND responder, skip requests coming from localnet
+    /* Ingress table 10: ARP/ND responder, skip requests coming from localnet
      * ports. (priority 100). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -2836,7 +2881,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 9: ARP/ND responder, reply for known IPs.
+    /* Ingress table 10: ARP/ND responder, reply for known IPs.
      * (priority 50). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -2929,7 +2974,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 9: ARP/ND responder, by default goto next.
+    /* Ingress table 10: ARP/ND responder, by default goto next.
      * (priority 0)*/
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
@@ -2939,7 +2984,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;");
     }
 
-    /* Logical switch ingress table 10 and 11: DHCP options and response
+    /* Logical switch ingress table 11 and 12: DHCP options and response
          * priority 100 flows. */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -3018,7 +3063,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 10 and 11: DHCP options and response, by default goto next.
+    /* Ingress table 11 and 12: DHCP options and response, by default goto next.
      * (priority 0). */
 
     HMAP_FOR_EACH (od, key_node, datapaths) {
@@ -3030,7 +3075,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_RESPONSE, 0, "1", "next;");
     }
 
-    /* Ingress table 12: define custom lflows with priority user defined typically 115 */
+    /* Ingress table 13: define custom lflows with priority user defined typically 115 */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
@@ -3058,7 +3103,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 13: Destination lookup, broadcast and multicast handling
+    /* Ingress table 14: Destination lookup, broadcast and multicast handling
      * (priority 100). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -3078,16 +3123,19 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                       "outport = \""MC_FLOOD"\"; output;");
     }
 
-    /* Ingress table 13: Destination lookup, unicast handling (priority 50), */
+    /* Ingress table 14: Destination lookup, unicast handling (priority 50), */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
             continue;
         }
 
         for (size_t i = 0; i < op->nbsp->n_addresses; i++) {
+            /* Addresses are owned by the logical port.
+             * Ethernet address followed by zero or more IPv4
+             * or IPv6 addresses (or both). */
             struct eth_addr mac;
-
-            if (eth_addr_from_string(op->nbsp->addresses[i], &mac)) {
+            if (ovs_scan(op->nbsp->addresses[i],
+                        ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(mac))) {
                 ds_clear(&match);
                 ds_put_format(&match, "eth.dst == "ETH_ADDR_FMT,
                               ETH_ADDR_ARGS(mac));
@@ -3101,10 +3149,10 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                     ovn_multicast_add(mcgroups, &mc_unknown, op);
                     op->od->has_unknown = true;
                 }
-            } else if (!strcmp(op->nbsp->addresses[i], "dynamic")) {
+            } else if (is_dynamic_lsp_address(op->nbsp->addresses[i])) {
                 if (!op->nbsp->dynamic_addresses
-                    || !eth_addr_from_string(op->nbsp->dynamic_addresses,
-                                            &mac)) {
+                    || !ovs_scan(op->nbsp->dynamic_addresses,
+                            ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(mac))) {
                     continue;
                 }
                 ds_clear(&match);
@@ -3125,7 +3173,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* Ingress table 12: Destination lookup for unknown MACs (priority 0). */
+    /* Ingress table 14: Destination lookup for unknown MACs (priority 0). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbs) {
             continue;
@@ -4349,8 +4397,22 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
         sbrec_logical_flow_set_match(sbflow, lflow->match);
         sbrec_logical_flow_set_actions(sbflow, lflow->actions);
 
-        const struct smap ids = SMAP_CONST1(&ids, "stage-name",
-                                            ovn_stage_to_str(lflow->stage));
+        /* Trim the source locator lflow->where, which looks something like
+         * "ovn/northd/ovn-northd.c:1234", down to just the part following the
+         * last slash, e.g. "ovn-northd.c:1234". */
+        const char *slash = strrchr(lflow->where, '/');
+#if _WIN32
+        const char *backslash = strrchr(lflow->where, '\\');
+        if (!slash || backslash > slash) {
+            slash = backslash;
+        }
+#endif
+        const char *where = slash ? slash + 1 : lflow->where;
+
+        const struct smap ids = SMAP_CONST2(
+            &ids,
+            "stage-name", ovn_stage_to_str(lflow->stage),
+            "source", where);
         sbrec_logical_flow_set_external_ids(sbflow, &ids);
 
         ovn_lflow_destroy(&lflows, lflow);

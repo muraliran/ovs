@@ -1258,6 +1258,9 @@ ovn-nbctl ls-add lsw0
 ovn-sbctl chassis-add hv0 geneve 127.0.0.1
 for i in 1 2 3; do
     ovn-nbctl lsp-add lsw0 lp$i
+done
+ovn-nbctl --wait=sb sync
+for i in 1 2 3; do
     ovn-sbctl lsp-bind lp$i hv0
     if test $i = 1; then
         ovn-nbctl lsp-set-addresses lp$i "f0:00:00:00:00:0$i 192.168.0.$i" unknown
@@ -1467,7 +1470,6 @@ AT_CLEANUP
 # 2 locally attached networks (one flat, one vlan tagged over same device)
 # 2 ports per HV on each network
 AT_SETUP([ovn -- 2 HVs, 4 lports/HV, localnet ports])
-AT_KEYWORDS([ovn-localnet])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -2372,7 +2374,6 @@ AT_CLEANUP
 
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 AT_SETUP([ovn -- portsecurity : 3 HVs, 1 LS, 3 lports/HV])
-AT_KEYWORDS([portsecurity])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -2622,13 +2623,13 @@ sip=`ip_to_hex 192 168 0 13`
 tip=`ip_to_hex 192 168 0 23`
 test_ip 13 f00000000113 f00000000023 $sip $tip
 
-# ipv6 packet should be received by lp[123]3 with mac f0000000{i}{i}3
-# and ip6.dst as fe80::ea2a:eaff:fe28:0{i}{i}3.
+# ipv6 packet should be received by lp[123]3 with mac f00000000${i}${i}3
+# and ip6.dst as fe80::ea2a:eaff:fe28:0${i}${i}3.
 # lp11 can send ipv6 traffic as there is no port security
 sip=ee800000000000000000000000000000
 for i in 1 2 3; do
-    tip=fe80000000000000ea2aeafffe2800{i}3
-    test_ipv6 11 f00000000011 f000000000{i}${i}3 $sip $tip {i}3
+    tip=fe80000000000000ea2aeafffe2800${i}3
+    test_ipv6 11 f00000000011 f00000000${i}${i}3 $sip $tip ${i}3
 done
 
 
@@ -2641,8 +2642,8 @@ sip=ee800000000000000000000000000000
 tip=fe80000000000000ea2aeafffe280023
 test_ipv6 11 f00000000011 f00000000333 $sip $tip
 
-# ipv6 packet should be allowed for lp[123]3 with mac f0000000{i}{i}3
-# and ip6.src fe80::ea2a:eaff:fe28:0{i}{i}3 and ip6.src ::.
+# ipv6 packet should be allowed for lp[123]3 with mac f0000000${i}${i}3
+# and ip6.src fe80::ea2a:eaff:fe28:0${i}${i}3 and ip6.src ::.
 # and should be dropped for any other ip6.src
 # lp21 can receive ipv6 traffic as there is no port security
 
@@ -2749,7 +2750,6 @@ OVN_CLEANUP([hv1],[hv2],[hv3])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 2 LS, 1 lport/LS, 2 peer LRs])
-AT_KEYWORDS([ovnpeer])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -3116,7 +3116,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 3 LS, 1 lport/LS, 2 peer LRs, static routes])
-AT_KEYWORDS([ovnstaticroutespeer])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -3269,7 +3268,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous arp on localnet])
-AT_KEYWORDS([ovn])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 ovn-nbctl ls-add lsw0
@@ -3311,7 +3309,6 @@ OVN_CLEANUP([hv])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 3 LRs connected via LS, static routes])
-AT_KEYWORDS([ovnstaticroutes])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -3488,7 +3485,6 @@ OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
 
 AT_SETUP([ovn -- dhcpv4 : 1 HV, 2 LS, 2 LSPs/LS])
-AT_KEYWORDS([dhcpv4])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -3758,7 +3754,6 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 
 AT_SETUP([ovn -- dhcpv6 : 1 HV, 2 LS, 5 LSPs])
-AT_KEYWORDS([dhcpv6])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -4020,7 +4015,6 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
 
 AT_SETUP([ovn -- 2 HVs, 2 LRs connected via LS, gateway router])
-AT_KEYWORDS([ovngatewayrouter])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -4336,7 +4330,6 @@ AT_CLEANUP
 # make sure that the port state is properly set to up and back down
 # when created and deleted.
 AT_SETUP([ovn -- port state up and down])
-AT_KEYWORDS([ovn])
 ovn_start
 
 ovn-nbctl ls-add ls1
@@ -4362,7 +4355,7 @@ AT_CLEANUP
 # make sure that the OF rules created to support a datapath are added/cleared
 # when logical switch is created and removed.
 AT_SETUP([ovn -- datapath rules added/removed])
-AT_KEYWORDS([ovn datapath cleanup])
+AT_KEYWORDS([cleanup])
 ovn_start
 
 net_add n1
@@ -4426,7 +4419,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- nd_na ])
-AT_KEYWORDS([ovn-nd_na])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -4498,7 +4490,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- address sets modification/removal smoke test])
-AT_KEYWORDS([ovn-addr])
 ovn_start
 
 net_add n1
@@ -4524,7 +4515,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ipam])
-AT_KEYWORDS([ovnipam])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -4532,7 +4522,7 @@ ovn_start
 # subnet which should result in an address being allocated for the port.
 ovn-nbctl ls-add sw0
 ovn-nbctl lsp-add sw0 p0 -- lsp-set-addresses p0 dynamic
-ovn-nbctl add Logical-Switch sw0 other_config subnet=192.168.1.0/24
+ovn-nbctl --wait=sb add Logical-Switch sw0 other_config subnet=192.168.1.0/24
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p0 dynamic_addresses], [0],
     ["0a:00:00:00:00:01 192.168.1.2"
 ])
@@ -4669,6 +4659,13 @@ AT_CHECK([ovn-nbctl get Logical-Switch-Port p30 dynamic_addresses], [0],
      ["0a:00:00:00:00:20 192.168.1.17"
 ])
 
+# Test static MAC address with dynamically allocated IP
+ovn-nbctl --wait=sb lsp-add sw0 p31 -- lsp-set-addresses p31 \
+"fe:dc:ba:98:76:54 dynamic"
+AT_CHECK([ovn-nbctl get Logical-Switch-Port p31 dynamic_addresses], [0],
+     ["fe:dc:ba:98:76:54 192.168.1.18"
+])
+
 as ovn-sb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
@@ -4681,7 +4678,6 @@ OVS_APP_EXIT_AND_WAIT([ovn-northd])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ipam connectivity])
-AT_KEYWORDS([ovnipamconnectivity])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -4702,25 +4698,19 @@ ovn-nbctl lsp-add alice rp-alice -- set Logical_Switch_Port rp-alice type=router
           options:router-port=alice addresses=\"00:00:00:01:02:04\"
 
 # Create logical port foo1 in foo
-ovn-nbctl lsp-add foo foo1 \
+ovn-nbctl --wait=sb lsp-add foo foo1 \
 -- lsp-set-addresses foo1 "dynamic"
-AT_CHECK([ovn-nbctl get Logical-Switch-Port foo1 dynamic_addresses], [0],
-     ["0a:00:00:00:00:01 192.168.1.2"
-])
+AT_CHECK([ovn-nbctl --timeout=10 wait-until Logical-Switch-Port foo1 dynamic_addresses='"0a:00:00:00:00:01 192.168.1.2"'], [0])
 
 # Create logical port alice1 in alice
-ovn-nbctl lsp-add alice alice1 \
+ovn-nbctl --wait=sb lsp-add alice alice1 \
 -- lsp-set-addresses alice1 "dynamic"
-AT_CHECK([ovn-nbctl get Logical-Switch-Port alice1 dynamic_addresses], [0],
-     ["0a:00:00:00:00:02 192.168.2.2"
-])
+AT_CHECK([ovn-nbctl --timeout=10 wait-until Logical-Switch-Port alice1 dynamic_addresses='"0a:00:00:00:00:02 192.168.2.2"'])
 
 # Create logical port foo2 in foo
-ovn-nbctl lsp-add foo foo2 \
+ovn-nbctl --wait=sb lsp-add foo foo2 \
 -- lsp-set-addresses foo2 "dynamic"
-AT_CHECK([ovn-nbctl get Logical-Switch-Port foo2 dynamic_addresses], [0],
-     ["0a:00:00:00:00:03 192.168.1.3"
-])
+AT_CHECK([ovn-nbctl --timeout=10 wait-until Logical-Switch-Port foo2 dynamic_addresses='"0a:00:00:00:00:03 192.168.1.3"'])
 
 # Create a hypervisor and create OVS ports corresponding to logical ports.
 net_add n1
@@ -4815,7 +4805,7 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- ovs-vswitchd restart])
-AT_KEYWORDS([vswitchd restart])
+AT_KEYWORDS([vswitchd])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -4910,7 +4900,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send arp for nexthop])
-AT_KEYWORDS([ovn])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -5021,7 +5010,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- send gratuitous arp for nat ips in localnet])
-AT_KEYWORDS([ovn])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 # Create logical switch
@@ -5070,7 +5058,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- delete mac bindings])
-AT_KEYWORDS([ovn])
 ovn_start
 net_add n1
 sim_add hv1
@@ -5088,22 +5075,20 @@ dp_uuid=`ovn-sbctl find datapath | grep uuid | cut -f2 -d ":" | cut -f2 -d " "`
 ovn-sbctl create MAC_Binding ip=10.0.0.1 datapath=$dp_uuid logical_port=lp0 mac="mac1"
 ovn-sbctl create MAC_Binding ip=10.0.0.1 datapath=$dp_uuid logical_port=lp1 mac="mac2"
 ovn-sbctl find MAC_Binding
-#Delete port lp0
+# Delete port lp0 and check that its MAC_Binding is deleted.
 ovn-nbctl lsp-del lp0
 ovn-sbctl find MAC_Binding
-AT_CHECK([ovn-sbctl find MAC_Binding logical_port=lp0], [0], [])
-#Delete ls0. This will verify that the mac_bindings are cleaned up when a
-#datapath is deleted without explicitly removing the the logical ports
+OVS_WAIT_UNTIL([test `ovn-sbctl find MAC_Binding logical_port=lp0 | wc -l` = 0])
+# Delete logical switch ls0 and check that its MAC_Binding is deleted.
 ovn-nbctl ls-del ls0
 ovn-sbctl find MAC_Binding
-AT_CHECK([ovn-sbctl find MAC_Binding], [0], [])
+OVS_WAIT_UNTIL([test `ovn-sbctl find MAC_Binding | wc -l` = 0])
 
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
 
 AT_SETUP([ovn -- conntrack zone allocation])
-AT_KEYWORDS([ovnconntrack])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
 
@@ -5158,7 +5143,6 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 AT_SETUP([ovn -- tag allocation])
-AT_KEYWORDS([ovntags])
 ovn_start
 
 AT_CHECK([ovn-nbctl ls-add ls0])
@@ -5274,7 +5258,6 @@ AT_CHECK([ovn-nbctl lsp-get-tag local1], [0], [50
 AT_CLEANUP
 
 AT_SETUP([ovn -- lsp deletion and broadcast-flow deletion on localnet])
-AT_KEYWORDS([ovn])
 ovn_start
 ovn-nbctl ls-add lsw0
 net_add n1
@@ -5339,6 +5322,90 @@ AT_CHECK([ovn-nbctl lsp-del localvif2])
 # because, localvif3 is still bound.
 OVS_WAIT_UNTIL([test `ovs-vsctl show | grep "Port patch-br-int-to-ln_port" | wc -l` -eq 1])
 
-
 OVN_CLEANUP([hv1],[hv2])
+
+AT_CLEANUP
+
+AT_SETUP([ovn -- DSCP marking check])
+AT_KEYWORDS([ovn])
+ovn_start
+
+ovn-nbctl ls-add lsw0
+ovn-nbctl --wait=sb lsp-add lsw0 lp1
+ovn-nbctl --wait=sb lsp-add lsw0 lp2
+ovn-nbctl lsp-set-addresses lp1 f0:00:00:00:00:01
+ovn-nbctl lsp-set-addresses lp2 f0:00:00:00:00:02
+ovn-nbctl lsp-set-port-security lp1 f0:00:00:00:00:01
+ovn-nbctl lsp-set-port-security lp2 f0:00:00:00:00:02
+ovn-nbctl --wait=sb sync
+net_add n1
+sim_add hv
+as hv
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=lp1 options:tx_pcap=vif1-tx.pcap options:rxq_pcap=vif1-rx.pcap ofport-request=1
+ovs-vsctl add-port br-int vif2 -- set Interface vif2 external-ids:iface-id=lp2 options:tx_pcap=vif2-tx.pcap options:rxq_pcap=vif2-rx.pcap ofport-request=2
+
+AT_CAPTURE_FILE([trace])
+ovn_trace () {
+    ovn-trace --all "$@" | tee trace | sed '1,/Minimal trace/d'
+}
+
+# Extracts nw_tos from the final flow from ofproto/trace output and prints
+# it on stdout.  Prints "none" if no nw_tos was included.
+get_final_nw_tos() {
+    if flow=$(grep '^Final flow:' stdout); then :; else
+       # The output didn't have a final flow.
+       return 99
+    fi
+
+    tos=$(echo "$flow" | sed -n 's/.*nw_tos=\([[0-9]]\{1,\}\).*/\1/p')
+    case $tos in
+        '') echo none ;;
+	*) echo $tos ;;
+    esac
+}
+
+# check_tos TOS
+#
+# Checks that a packet from 1.1.1.1 to 1.1.1.2 gets its DSCP set to TOS.
+check_tos() {
+    # First check with ovn-trace for logical flows.
+    echo "checking for tos $1"
+    (if test $1 != 0; then echo "ip.dscp = $1;"; fi;
+     echo 'output("lp2");') > expout
+    AT_CHECK_UNQUOTED([ovn_trace lsw0 'inport == "lp1" && eth.src == f0:00:00:00:00:01 && eth.dst == f0:00:00:00:00:02 && ip4.src == 1.1.1.1 && ip4.dst == 1.1.1.2'], [0], [expout])
+
+    # Then re-check with ofproto/trace for a physical packet.
+    AT_CHECK([ovs-appctl ofproto/trace br-int 'in_port=1,dl_src=f0:00:00:00:00:01,dl_dst=f0:00:00:00:00:02,dl_type=0x800,nw_src=1.1.1.1,nw_dst=1.1.1.2'], [0], [stdout-nolog])
+    AT_CHECK_UNQUOTED([get_final_nw_tos], [0], [`expr $1 \* 4`
+])
+}
+
+# check at L2
+AT_CHECK([ovn_trace lsw0 'inport == "lp1" && eth.src == f0:00:00:00:00:01 && eth.dst == f0:00:00:00:00:02'], [0], [output("lp2");
+])
+AT_CHECK([ovs-appctl ofproto/trace br-int 'in_port=1,dl_src=f0:00:00:00:00:01,dl_dst=f0:00:00:00:00:02'], [0], [stdout-nolog])
+AT_CHECK([get_final_nw_tos], [0], [none
+])
+
+# check at L3 without dscp marking
+check_tos 0
+
+# Mark DSCP with a valid value
+qos_id=$(ovn-nbctl --wait=hv -- --id=@lp1-qos create QoS priority=100 action=dscp=48 match="inport\=\=\"lp1\"" direction="from-lport" -- set Logical_Switch lsw0 qos_rules=@lp1-qos)
+check_tos 48
+
+# Update the DSCP marking
+ovn-nbctl --wait=hv set QoS $qos_id action=dscp=63
+check_tos 63
+
+ovn-nbctl --wait=hv set QoS $qos_id match="outport\=\=\"lp2\"" direction="to-lport"
+check_tos 63
+
+# Disable DSCP marking
+ovn-nbctl --wait=hv clear Logical_Switch lsw0 qos_rules
+check_tos 0
+
+OVN_CLEANUP([hv])
 AT_CLEANUP
