@@ -2595,6 +2595,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
                 ovn_lflow_add(lflows, od, stage,
                               acl->priority + OVN_ACL_PRI_OFFSET,
                               acl->match, "drop;");
+                ds_destroy(&match);
             }
         }
     }
@@ -4828,9 +4829,6 @@ main(int argc, char *argv[])
     unixctl_command_register("exit", "", 0, 0, ovn_northd_exit, &exiting);
 
     daemonize_complete();
-
-    nbrec_init();
-    sbrec_init();
 
     /* We want to detect (almost) all changes to the ovn-nb db. */
     struct ovsdb_idl_loop ovnnb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
